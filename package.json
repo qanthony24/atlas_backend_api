@@ -1,25 +1,25 @@
 {
   "name": "atlas-backend",
   "version": "1.0.0",
-  "main": "server.ts",  // Or wherever your entrypoint is
+  "main": "server.ts",
   "scripts": {
-    "start": "npx tsx server.ts",  // For API service
-    "worker": "npx tsx worker.ts"  // For worker service
+    "start": "npx tsx server.ts",
+    "worker": "npx tsx worker.ts"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.0",
-    "crypto": "built-in",  // Node built-in
+    "crypto": "built-in",
     "multer": "^1.4.5-lts.1",
     "pg": "^8.11.3",
     "ioredis": "^0.0.3",
-    "@aws-sdk/client-s3": "^3.0.0"  // For Cloudflare R2
-    // Add any others from your app.ts imports, e.g., bullmq if used
+    "@aws-sdk/client-s3": "^3.0.0"
+    
   },
   "devDependencies": {
     "typescript": "^5.3.3",
-    "tsx": "^4.7.0"  // For running TS directly
+    "tsx": "^4.7.0"
   }
 }
