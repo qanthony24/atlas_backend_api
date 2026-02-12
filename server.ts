@@ -1,5 +1,6 @@
 import { runPreflight } from "./preflight";
 import { createApp } from './app';
+import { Pool } from 'pg';
 import { config } from './config';
 import { getPool, runSchema } from './db';
 import { createQueueConnection, createImportQueue } from './queue';
@@ -10,7 +11,7 @@ declare const module: any;
 
 const start = async () => {
   await runPreflight();
-  const pool = getPool();
+  const pool = new Pool({ connectionString: config.postgresUrl });
   await runSchema(pool);
 
   const connection = createQueueConnection();
@@ -22,9 +23,9 @@ const start = async () => {
   const app = createApp({ pool, importQueue, s3Client });
 
   // Railway sets PORT. Fall back to config.port for local dev.
-  const port = Number(process.env.PORT ?? config.port ?? 3000);
-
-  app.listen(port, "0.0.0.0", () => {
-    console.log(`VoterField Backend running on port ${port}`);
-  });
+  const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server listening on port ${port}`);
+});
 };
+
