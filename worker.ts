@@ -13,6 +13,8 @@ const startWorker = async () => {
 
     const connection = createQueueConnection();
 
+    const s3Client = createS3Client();
+    await ensureBucket(s3Client, config.s3Bucket);
 
     const worker = new Worker(
         'import_voters',
@@ -25,6 +27,8 @@ const startWorker = async () => {
     worker.on('failed', (job, err) => {
         console.error('Import job failed', job?.id, err);
     });
+
+    console.log('Worker running...');
 };
 
 startWorker().catch(err => {
