@@ -123,7 +123,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Health / Readiness (always JSON)
   // -------------------------
-  app.get("/health", (_req, res) => res.status(200).send("OK"));
+  app.get('/health', (req, res) => res.type('text/plain').send('OK'));
 
   app.get("/ready", async (_req, res) => {
     try {
@@ -541,5 +541,6 @@ app.get('/health', (req, res) => res.send('OK'));
 
   return app;
 };
+
 
 
