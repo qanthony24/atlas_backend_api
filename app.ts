@@ -100,13 +100,11 @@ const mapInteraction = (row: any) => ({
 });
 
 function findOpenApiYamlPath(): string | null {
-  // We check both locations because your repo is “wonky” by design
-  // (some things live at repo root, most backend things live in /backend).
-  const candidates = [
-    path.resolve(process.cwd(), "openapi.yaml"),
-    path.resolve(process.cwd(), "backend", "openapi.yaml"),
+  const possiblePaths = [
+    'openapi.yaml',
+    './openapi.yaml'
   ];
-  for (const p of candidates) {
+  for (const p of possiblePaths) {
     if (fs.existsSync(p)) return p;
   }
   return null;
@@ -541,6 +539,7 @@ app.get('/health', (req, res) => res.send('OK'));
 
   return app;
 };
+
 
 
 
