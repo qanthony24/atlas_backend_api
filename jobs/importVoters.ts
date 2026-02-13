@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import crypto from 'crypto';
 import { S3Client } from '@aws-sdk/client-s3';
-import { cleanLouisianaHeader, parseCSVLine } from '../../utils/csvParser';
+import { cleanLouisianaHeader, parseCSVLine } from '../utils/csvParser';
 import { getObjectBody } from '../storage';
 import { config } from '../config';
 
