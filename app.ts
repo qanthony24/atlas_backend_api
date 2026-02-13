@@ -139,7 +139,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       res.status(503).json({ status: "not_ready", error: err?.message || String(err) });
     }
   });
-
+app.get('/health', (req, res) => res.send('OK'));
   // -------------------------
   // Serve OpenAPI YAML as RAW YAML (never HTML)
   // -------------------------
@@ -540,3 +540,4 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
   return app;
 };
+
