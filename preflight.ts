@@ -1,5 +1,3 @@
-// backend/preflight.ts
-
 import { Pool } from "pg";
 import IORedis from "ioredis";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
