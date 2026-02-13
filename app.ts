@@ -117,6 +117,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   const upload = multer({ storage: multer.memoryStorage() });
 
   app.use(express.json({ limit: "10mb" }));
+  app.get('/health', (req, res) => res.status(200).send('OK'));
   app.use(cors());
 
   // -------------------------
@@ -540,4 +541,5 @@ app.get('/health', (req, res) => res.send('OK'));
 
   return app;
 };
+
 
