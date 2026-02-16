@@ -9,4 +9,6 @@ RUN chmod +x node_modules/.bin/*
 
 COPY . .
 
-CMD ["npx", "tsx", "worker.ts"]
+# Default container entrypoint runs the API server.
+# Railway worker service should override the start command to `npm run worker`.
+CMD ["npm", "run", "start"]
