@@ -121,7 +121,15 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Health / Readiness
   // -------------------------
+  // Keep /health extremely lightweight & stable (Railway uses it for health checks).
   app.get('/health', (_req, res) => res.type('text/plain').send('OK'));
+
+  // Deployment marker: helps confirm which code is actually running in Railway.
+  // Safe to expose; contains no secrets.
+  const DEPLOY_MARKER = 'deploy-marker-2026-02-16-ctx-v1';
+  app.get('/__version', (_req, res) => {
+    res.status(200).json({ marker: DEPLOY_MARKER });
+  });
 
   app.get("/ready", async (_req, res) => {
     try {
