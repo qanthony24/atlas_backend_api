@@ -190,13 +190,13 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // Session endpoints
   // -------------------------
   app.get("/api/v1/me", async (req: any, res) => {
-    const user = await pool.query("SELECT * FROM users WHERE id = $1 AND org_id = $2", [req.user.sub, req.user.org_id]);
-    const org = await pool.query("SELECT * FROM organizations WHERE id = $1", [req.user.org_id]);
+    const user = await pool.query("SELECT * FROM users WHERE id = $1 AND org_id = $2", [req.context.userId, req.context.orgId]);
+    const org = await pool.query("SELECT * FROM organizations WHERE id = $1", [req.context.orgId]);
     res.json({ user: mapUser(user.rows[0]), org: mapOrg(org.rows[0]) });
   });
 
   app.get("/api/v1/org", async (req: any, res) => {
-    const org = await pool.query("SELECT * FROM organizations WHERE id = $1", [req.user.org_id]);
+    const org = await pool.query("SELECT * FROM organizations WHERE id = $1", [req.context.orgId]);
     res.json(mapOrg(org.rows[0]));
   });
 
@@ -208,7 +208,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     const lim = Math.min(Number(limit) || 50, 200);
     const off = Number(offset) || 0;
 
-    const params: any[] = [req.user.org_id, lim, off];
+    const params: any[] = [req.context.orgId, lim, off];
 
     let where = "WHERE v.org_id = $1";
     if (q) {
@@ -261,7 +261,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         ORDER BY v.last_name, v.first_name
         LIMIT $3 OFFSET $4
       `;
-      const rows = await pool.query(sql, [`%${q}%`, req.user.org_id, lim, off]);
+      const rows = await pool.query(sql, [`%${q}%`, req.context.orgId, lim, off]);
       return res.json({ voters: rows.rows.map(mapVoter), limit: lim, offset: off });
     }
 
@@ -286,7 +286,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       ORDER BY v.last_name, v.first_name
       LIMIT $2 OFFSET $3
       `,
-      [req.user.org_id, lim, off]
+      [req.context.orgId, lim, off]
     );
 
     res.json({ voters: rows.rows.map(mapVoter), limit: lim, offset: off });
@@ -295,7 +295,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   app.get("/api/v1/voters/:id", async (req: any, res) => {
     const row = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [
       req.params.id,
-      req.user.org_id,
+      req.context.orgId,
     ]);
     if (!row.rows[0]) return res.status(404).json({ error: "Not found" });
     res.json(mapVoter(row.rows[0]));
@@ -312,7 +312,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       `,
       [
         id,
-        req.user.org_id,
+        req.context.orgId,
         v.externalId || null,
         v.firstName || "",
         v.middleName || null,
@@ -333,7 +333,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       ]
     );
 
-    const created = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.user.org_id]);
+    const created = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
     res.status(201).json(mapVoter(created.rows[0]));
   });
 
@@ -354,7 +354,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       GROUP BY wl.id
       ORDER BY wl.created_at DESC
       `,
-      [req.user.org_id]
+      [req.context.orgId]
     );
 
     res.json(rows.rows.map(mapList));
@@ -373,13 +373,13 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
       await client.query(
         "INSERT INTO walk_lists (id, org_id, name, created_by_user_id) VALUES ($1,$2,$3,$4)",
-        [listId, req.user.org_id, name, req.user.sub]
+        [listId, req.context.orgId, name, req.context.userId]
       );
 
       for (const voterId of ids) {
         await client.query(
           "INSERT INTO list_members (org_id, list_id, voter_id) VALUES ($1,$2,$3) ON CONFLICT (org_id, list_id, voter_id) DO NOTHING",
-          [req.user.org_id, listId, voterId]
+          [req.context.orgId, listId, voterId]
         );
       }
 
@@ -403,7 +403,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       WHERE wl.id = $1 AND wl.org_id = $2
       GROUP BY wl.id
       `,
-      [listId, req.user.org_id]
+      [listId, req.context.orgId]
     );
 
     res.status(201).json(mapList(created.rows[0]));
@@ -411,16 +411,16 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
   app.get("/api/v1/assignments", async (req: any, res) => {
     const scope = (req.query?.scope as string) || "me";
-    if (scope === "org" && req.user.role !== "admin") {
+    if (scope === "org" && req.context.role !== "admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
 
     const rows =
       scope === "org"
-        ? await pool.query("SELECT * FROM assignments WHERE org_id = $1 ORDER BY created_at DESC", [req.user.org_id])
+        ? await pool.query("SELECT * FROM assignments WHERE org_id = $1 ORDER BY created_at DESC", [req.context.orgId])
         : await pool.query(
             "SELECT * FROM assignments WHERE org_id = $1 AND canvasser_id = $2 ORDER BY created_at DESC",
-            [req.user.org_id, req.user.sub]
+            [req.context.orgId, req.context.userId]
           );
 
     res.json(rows.rows.map(mapAssignment));
@@ -432,10 +432,10 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
     await pool.query(
       "INSERT INTO assignments (id, org_id, list_id, canvasser_id, status) VALUES ($1,$2,$3,$4,$5)",
-      [id, req.user.org_id, listId, canvasserId, "assigned"]
+      [id, req.context.orgId, listId, canvasserId, "assigned"]
     );
 
-    const created = await pool.query("SELECT * FROM assignments WHERE id = $1 AND org_id = $2", [id, req.user.org_id]);
+    const created = await pool.query("SELECT * FROM assignments WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
     res.status(201).json(mapAssignment(created.rows[0]));
   });
 
@@ -454,7 +454,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       ORDER BY i.occurred_at DESC
       LIMIT 200
       `,
-      [req.user.org_id]
+      [req.context.orgId]
     );
     res.json(rows.rows.map(mapInteraction));
   });
@@ -467,7 +467,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
     const existing = await pool.query(
       "SELECT * FROM interactions WHERE org_id = $1 AND client_interaction_uuid = $2 LIMIT 1",
-      [req.user.org_id, clientUUID]
+      [req.context.orgId, clientUUID]
     );
     if (existing.rows[0]) {
       return res.status(200).json(mapInteraction(existing.rows[0]));
@@ -492,8 +492,8 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         `,
         [
           id,
-          req.user.org_id,
-          req.user.sub,
+          req.context.orgId,
+          req.context.userId,
           body.voter_id,
           body.assignment_id || null,
           occurredAt,
@@ -507,7 +507,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       if (body.survey_responses && typeof body.survey_responses === 'object') {
         await client.query(
           `INSERT INTO survey_responses (org_id, interaction_id, responses) VALUES ($1,$2,$3)`,
-          [req.user.org_id, id, body.survey_responses]
+          [req.context.orgId, id, body.survey_responses]
         );
       }
 
@@ -528,7 +528,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
        AND sr.interaction_id = i.id
       WHERE i.id = $1 AND i.org_id = $2
       `,
-      [id, req.user.org_id]
+      [id, req.context.orgId]
     );
 
     res.status(201).json(mapInteraction(created.rows[0]));
@@ -538,7 +538,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // Users
   // -------------------------
   app.get("/api/v1/users", requireAdmin, async (req: any, res) => {
-    const rows = await pool.query("SELECT * FROM users WHERE org_id = $1 ORDER BY created_at DESC", [req.user.org_id]);
+    const rows = await pool.query("SELECT * FROM users WHERE org_id = $1 ORDER BY created_at DESC", [req.context.orgId]);
     res.json(rows.rows.map(mapUser));
   });
 
@@ -548,7 +548,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   app.get("/api/v1/jobs/:id", async (req: any, res) => {
     const row = await pool.query("SELECT * FROM import_jobs WHERE id = $1 AND org_id = $2", [
       req.params.id,
-      req.user.org_id,
+      req.context.orgId,
     ]);
     if (!row.rows[0]) return res.status(404).json({ error: "Not found" });
     res.json(row.rows[0]);
@@ -565,15 +565,15 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       `,
       [
         jobId,
-        req.user.org_id,
-        req.user.sub,
+        req.context.orgId,
+        req.context.userId,
         'import_voters',
         'pending',
         { count: Array.isArray(voters) ? voters.length : 0 },
       ]
     );
 
-    await importQueue.add('import-voters', { jobId, orgId: req.user.org_id, userId: req.user.sub, voters });
+    await importQueue.add('import-voters', { jobId, orgId: req.context.orgId, userId: req.context.userId, voters });
 
     res.status(202).json({ id: jobId, status: 'pending' });
   });
@@ -583,7 +583,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     if (!req.file) return res.status(400).json({ error: "file required" });
 
     const jobId = crypto.randomUUID();
-    const key = `imports/${req.user.org_id}/${jobId}.csv`;
+    const key = `imports/${req.context.orgId}/${jobId}.csv`;
 
     await putObject(s3Client, config.s3Bucket, key, req.file.buffer);
 
@@ -594,8 +594,8 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       `,
       [
         jobId,
-        req.user.org_id,
-        req.user.sub,
+        req.context.orgId,
+        req.context.userId,
         'import_voters',
         'pending',
         key,
@@ -603,7 +603,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       ]
     );
 
-    await importQueue.add('import-voters-file', { jobId, orgId: req.user.org_id, userId: req.user.sub, fileKey: key });
+    await importQueue.add('import-voters-file', { jobId, orgId: req.context.orgId, userId: req.context.userId, fileKey: key });
 
     res.status(202).json({ id: jobId, status: 'pending' });
   });
@@ -612,9 +612,9 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // Metrics
   // -------------------------
   app.get("/api/v1/metrics/field/summary", requireAdmin, async (req: any, res) => {
-    const voters = await pool.query("SELECT COUNT(*)::int AS count FROM voters WHERE org_id = $1", [req.user.org_id]);
+    const voters = await pool.query("SELECT COUNT(*)::int AS count FROM voters WHERE org_id = $1", [req.context.orgId]);
     const interactions = await pool.query("SELECT COUNT(*)::int AS count FROM interactions WHERE org_id = $1", [
-      req.user.org_id,
+      req.context.orgId,
     ]);
     res.json({ voter_count: voters.rows[0].count, interaction_count: interactions.rows[0].count });
   });
