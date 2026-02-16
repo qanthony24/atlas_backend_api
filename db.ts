@@ -7,17 +7,8 @@ let poolInstance: Pool | null = null;
 
 export const getPool = (): Pool => {
   if (poolInstance) return poolInstance;
-  if (config.databaseUrl) {
-    poolInstance = new Pool({ connectionString: config.databaseUrl });
-  } else {
-    poolInstance = new Pool({
-      host: config.dbHost,
-      port: config.dbPort,
-      user: config.dbUser,
-      password: config.dbPassword,
-      database: config.dbName
-    });
-  }
+  // In this codebase we always use DATABASE_URL (Railway / prod friendly)
+  poolInstance = new Pool({ connectionString: config.databaseUrl });
   return poolInstance;
 };
 

@@ -71,6 +71,7 @@ const mapList = (row: any) => ({
   id: row.id,
   orgId: row.org_id,
   name: row.name,
+  // For the relational model (walk_lists + list_members) we aggregate voter_ids in the query.
   voterIds: row.voter_ids || [],
   createdAt: row.created_at,
   createdByUserId: row.created_by_user_id,
@@ -115,13 +116,12 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   const upload = multer({ storage: multer.memoryStorage() });
 
   app.use(express.json({ limit: "10mb" }));
-  app.get('/health', (req, res) => res.status(200).send('OK'));
   app.use(cors());
 
   // -------------------------
-  // Health / Readiness (always JSON)
+  // Health / Readiness
   // -------------------------
-  app.get('/health', (req, res) => res.type('text/plain').send('OK'));
+  app.get('/health', (_req, res) => res.type('text/plain').send('OK'));
 
   app.get("/ready", async (_req, res) => {
     try {
@@ -138,7 +138,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       res.status(503).json({ status: "not_ready", error: err?.message || String(err) });
     }
   });
-app.get('/health', (req, res) => res.send('OK'));
+  // (health route defined above)
   // -------------------------
   // Serve OpenAPI YAML as RAW YAML (never HTML)
   // -------------------------
@@ -190,7 +190,7 @@ app.get('/health', (req, res) => res.send('OK'));
   // Session endpoints
   // -------------------------
   app.get("/api/v1/me", async (req: any, res) => {
-    const user = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.sub]);
+    const user = await pool.query("SELECT * FROM users WHERE id = $1 AND org_id = $2", [req.user.sub, req.user.org_id]);
     const org = await pool.query("SELECT * FROM organizations WHERE id = $1", [req.user.org_id]);
     res.json({ user: mapUser(user.rows[0]), org: mapOrg(org.rows[0]) });
   });
@@ -341,18 +341,71 @@ app.get('/health', (req, res) => res.send('OK'));
   // Lists & Assignments
   // -------------------------
   app.get("/api/v1/lists", async (req: any, res) => {
-    const rows = await pool.query("SELECT * FROM lists WHERE org_id = $1 ORDER BY created_at DESC", [req.user.org_id]);
+    const rows = await pool.query(
+      `
+      SELECT
+        wl.*,
+        COALESCE(array_agg(lm.voter_id) FILTER (WHERE lm.voter_id IS NOT NULL), '{}') AS voter_ids
+      FROM walk_lists wl
+      LEFT JOIN list_members lm
+        ON lm.org_id = wl.org_id
+       AND lm.list_id = wl.id
+      WHERE wl.org_id = $1
+      GROUP BY wl.id
+      ORDER BY wl.created_at DESC
+      `,
+      [req.user.org_id]
+    );
+
     res.json(rows.rows.map(mapList));
   });
 
   app.post("/api/v1/lists", async (req: any, res) => {
     const { name, voterIds } = req.body || {};
-    const id = crypto.randomUUID();
-    await pool.query(
-      "INSERT INTO lists (id, org_id, name, voter_ids, created_by_user_id) VALUES ($1,$2,$3,$4,$5)",
-      [id, req.user.org_id, name, voterIds || [], req.user.sub]
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    const listId = crypto.randomUUID();
+    const ids: string[] = Array.isArray(voterIds) ? voterIds : [];
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        "INSERT INTO walk_lists (id, org_id, name, created_by_user_id) VALUES ($1,$2,$3,$4)",
+        [listId, req.user.org_id, name, req.user.sub]
+      );
+
+      for (const voterId of ids) {
+        await client.query(
+          "INSERT INTO list_members (org_id, list_id, voter_id) VALUES ($1,$2,$3) ON CONFLICT (org_id, list_id, voter_id) DO NOTHING",
+          [req.user.org_id, listId, voterId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const created = await pool.query(
+      `
+      SELECT
+        wl.*,
+        COALESCE(array_agg(lm.voter_id) FILTER (WHERE lm.voter_id IS NOT NULL), '{}') AS voter_ids
+      FROM walk_lists wl
+      LEFT JOIN list_members lm
+        ON lm.org_id = wl.org_id
+       AND lm.list_id = wl.id
+      WHERE wl.id = $1 AND wl.org_id = $2
+      GROUP BY wl.id
+      `,
+      [listId, req.user.org_id]
     );
-    const created = await pool.query("SELECT * FROM lists WHERE id = $1 AND org_id = $2", [id, req.user.org_id]);
+
     res.status(201).json(mapList(created.rows[0]));
   });
 
@@ -390,9 +443,19 @@ app.get('/health', (req, res) => res.send('OK'));
   // Interactions (idempotent)
   // -------------------------
   app.get("/api/v1/interactions", async (req: any, res) => {
-    const rows = await pool.query("SELECT * FROM interactions WHERE org_id = $1 ORDER BY occurred_at DESC LIMIT 200", [
-      req.user.org_id,
-    ]);
+    const rows = await pool.query(
+      `
+      SELECT i.*, sr.responses AS survey_responses
+      FROM interactions i
+      LEFT JOIN survey_responses sr
+        ON sr.org_id = i.org_id
+       AND sr.interaction_id = i.id
+      WHERE i.org_id = $1
+      ORDER BY i.occurred_at DESC
+      LIMIT 200
+      `,
+      [req.user.org_id]
+    );
     res.json(rows.rows.map(mapInteraction));
   });
 
@@ -411,28 +474,63 @@ app.get('/health', (req, res) => res.send('OK'));
     }
 
     const id = crypto.randomUUID();
-    await pool.query(
+    if (!body.voter_id) return res.status(400).json({ error: 'voter_id required' });
+    if (!body.result_code) return res.status(400).json({ error: 'result_code required' });
+
+    const occurredAt = body.occurred_at || new Date().toISOString();
+    const channel = body.channel || 'canvass';
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `
+        INSERT INTO interactions
+        (id, org_id, user_id, voter_id, assignment_id, occurred_at, channel, result_code, notes, client_interaction_uuid)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        `,
+        [
+          id,
+          req.user.org_id,
+          req.user.sub,
+          body.voter_id,
+          body.assignment_id || null,
+          occurredAt,
+          channel,
+          body.result_code,
+          body.notes || null,
+          clientUUID,
+        ]
+      );
+
+      if (body.survey_responses && typeof body.survey_responses === 'object') {
+        await client.query(
+          `INSERT INTO survey_responses (org_id, interaction_id, responses) VALUES ($1,$2,$3)`,
+          [req.user.org_id, id, body.survey_responses]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const created = await pool.query(
       `
-      INSERT INTO interactions
-      (id, org_id, user_id, voter_id, assignment_id, occurred_at, channel, result_code, notes, client_interaction_uuid, survey_responses)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      SELECT i.*, sr.responses AS survey_responses
+      FROM interactions i
+      LEFT JOIN survey_responses sr
+        ON sr.org_id = i.org_id
+       AND sr.interaction_id = i.id
+      WHERE i.id = $1 AND i.org_id = $2
       `,
-      [
-        id,
-        req.user.org_id,
-        req.user.sub,
-        body.voter_id,
-        body.assignment_id || null,
-        body.occurred_at || new Date().toISOString(),
-        body.channel || "canvass",
-        body.result_code || "unknown",
-        body.notes || null,
-        clientUUID,
-        body.survey_responses || null,
-      ]
+      [id, req.user.org_id]
     );
 
-    const created = await pool.query("SELECT * FROM interactions WHERE id = $1 AND org_id = $2", [id, req.user.org_id]);
     res.status(201).json(mapInteraction(created.rows[0]));
   });
 
@@ -462,15 +560,22 @@ app.get('/health', (req, res) => res.send('OK'));
 
     await pool.query(
       `
-      INSERT INTO import_jobs (id, org_id, status, created_at, metadata)
-      VALUES ($1,$2,$3,now(),$4)
+      INSERT INTO import_jobs (id, org_id, user_id, type, status, created_at, updated_at, metadata)
+      VALUES ($1,$2,$3,$4,$5,NOW(),NOW(),$6)
       `,
-      [jobId, req.user.org_id, "pending", { count: Array.isArray(voters) ? voters.length : 0 }]
+      [
+        jobId,
+        req.user.org_id,
+        req.user.sub,
+        'import_voters',
+        'pending',
+        { count: Array.isArray(voters) ? voters.length : 0 },
+      ]
     );
 
-    await importQueue.add("import-voters", { jobId, orgId: req.user.org_id, voters });
+    await importQueue.add('import-voters', { jobId, orgId: req.user.org_id, userId: req.user.sub, voters });
 
-    res.status(202).json({ id: jobId, status: "pending" });
+    res.status(202).json({ id: jobId, status: 'pending' });
   });
 
   // multipart file upload path (optional / future)
@@ -484,15 +589,23 @@ app.get('/health', (req, res) => res.send('OK'));
 
     await pool.query(
       `
-      INSERT INTO import_jobs (id, org_id, status, created_at, metadata)
-      VALUES ($1,$2,$3,now(),$4)
+      INSERT INTO import_jobs (id, org_id, user_id, type, status, created_at, updated_at, file_key, metadata)
+      VALUES ($1,$2,$3,$4,$5,NOW(),NOW(),$6,$7)
       `,
-      [jobId, req.user.org_id, "pending", { key, filename: req.file.originalname, size: req.file.size }]
+      [
+        jobId,
+        req.user.org_id,
+        req.user.sub,
+        'import_voters',
+        'pending',
+        key,
+        { key, filename: req.file.originalname, size: req.file.size },
+      ]
     );
 
-    await importQueue.add("import-voters-file", { jobId, orgId: req.user.org_id, key });
+    await importQueue.add('import-voters-file', { jobId, orgId: req.user.org_id, userId: req.user.sub, fileKey: key });
 
-    res.status(202).json({ id: jobId, status: "pending" });
+    res.status(202).json({ id: jobId, status: 'pending' });
   });
 
   // -------------------------

@@ -49,6 +49,15 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction) 
             role: decoded.role
         };
 
+        // Back-compat shim:
+        // Older handlers in app.ts reference req.user.{sub, org_id, role}.
+        // Keep both until we fully refactor to req.context everywhere.
+        (req as any).user = {
+            sub: decoded.sub,
+            org_id: decoded.org_id,
+            role: decoded.role,
+        };
+
         // Logger hook for Observability (Requirement 5)
         console.log(JSON.stringify({
             level: 'info',
