@@ -5,7 +5,6 @@
   "scripts": {
     "start": "npx tsx server.ts",
     "worker": "npx tsx worker.ts"
-    "postinstall": "chmod +x ./node_modules/.bin/*"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.540.0",
