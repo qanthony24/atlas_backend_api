@@ -174,14 +174,18 @@ paths:
 
   /me:
     get:
-      summary: Get current user context
+      summary: Get current user + org context
       responses:
         '200':
-          description: Current user details
+          description: Current session context
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  org: { $ref: '#/components/schemas/Organization' }
+                required: [user, org]
 
   /org:
     get:
@@ -205,7 +209,7 @@ paths:
           name: offset
           schema: { type: integer }
         - in: query
-          name: search
+          name: q
           schema: { type: string }
       responses:
         '200':
@@ -213,8 +217,14 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/Voter' }
+                type: object
+                properties:
+                  voters:
+                    type: array
+                    items: { $ref: '#/components/schemas/Voter' }
+                  limit: { type: integer }
+                  offset: { type: integer }
+                required: [voters, limit, offset]
     post:
       summary: Create voter
       requestBody:
@@ -222,7 +232,29 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Voter'
+              type: object
+              properties:
+                externalId: { type: string }
+                firstName: { type: string }
+                middleName: { type: string }
+                lastName: { type: string }
+                suffix: { type: string }
+                age: { type: integer }
+                gender: { type: string }
+                race: { type: string }
+                party: { type: string }
+                phone: { type: string }
+                address: { type: string }
+                unit: { type: string }
+                city: { type: string }
+                state: { type: string }
+                zip: { type: string }
+                geom:
+                  type: object
+                  properties:
+                    lat: { type: number }
+                    lng: { type: number }
+              required: [externalId, firstName, lastName, address, city, zip]
       responses:
         '201':
           description: Created
@@ -284,9 +316,10 @@ paths:
               type: object
               properties:
                 name: { type: string }
-                voter_ids:
+                voterIds:
                   type: array
                   items: { type: string, format: uuid }
+              required: [name]
       responses:
         '201':
           description: Created
@@ -301,7 +334,7 @@ paths:
       parameters:
         - in: query
           name: scope
-          schema: { type: string }
+          schema: { type: string, enum: [me, org] }
       responses:
         '200':
           description: Assignments
@@ -311,7 +344,7 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Assignment' }
     post:
-      summary: Assign list to canvasser
+      summary: Assign list to canvasser (admin only)
       requestBody:
         required: true
         content:
@@ -319,8 +352,9 @@ paths:
             schema:
               type: object
               properties:
-                list_id: { type: string, format: uuid }
-                canvasser_id: { type: string, format: uuid }
+                listId: { type: string, format: uuid }
+                canvasserId: { type: string, format: uuid }
+              required: [listId, canvasserId]
       responses:
         '201':
           description: Created
@@ -411,21 +445,26 @@ paths:
 
   /jobs/import-voters:
     post:
-      summary: Start async voter import
+      summary: Start async voter import (JSON payload)
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: array
-              items: { $ref: '#/components/schemas/Voter' }
+              items:
+                type: object
       responses:
-        '201':
-          description: Job created
+        '202':
+          description: Job queued
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job'
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string }
+                required: [id, status]
 
   /imports/voters:
     post:
