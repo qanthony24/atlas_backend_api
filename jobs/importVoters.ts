@@ -4,6 +4,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { cleanLouisianaHeader, parseCSVLine } from '../utils/csvParser';
 import { getObjectBody } from '../storage';
 import { config } from '../config';
+import { xlsxBufferToCsv } from '../utils/xlsxToCsv';
 
 export interface ImportJobPayload {
     jobId: string;
@@ -75,7 +76,13 @@ export const processImportJob = async (
         let rows: Array<Record<string, any>> = voters || [];
         if (fileKey && s3Client) {
             const body = await getObjectBody(s3Client, config.s3Bucket, fileKey);
-            rows = parseCsvToVoters(body.toString('utf-8'));
+
+            // Support both CSV and XLSX uploads. XLSX is converted to CSV in the worker (python3 + openpyxl)
+            // and then processed by the existing CSV mapping pipeline.
+            const lower = String(fileKey).toLowerCase();
+            const csvBuffer = lower.endsWith('.xlsx') ? await xlsxBufferToCsv(body) : body;
+
+            rows = parseCsvToVoters(csvBuffer.toString('utf-8'));
         }
 
         let importedCount = 0;

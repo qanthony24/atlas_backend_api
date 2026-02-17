@@ -591,7 +591,9 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     if (!req.file) return res.status(400).json({ error: "file required" });
 
     const jobId = crypto.randomUUID();
-    const key = `imports/${req.context.orgId}/${jobId}.csv`;
+    const extRaw = path.extname(req.file.originalname || '').toLowerCase();
+    const ext = extRaw && extRaw.length <= 10 ? extRaw : '.csv';
+    const key = `imports/${req.context.orgId}/${jobId}${ext}`;
 
     await putObject(s3Client, config.s3Bucket, key, req.file.buffer);
 
