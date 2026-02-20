@@ -545,9 +545,65 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Users
   // -------------------------
+  // Admin-only user list (optionally filter by role)
   app.get("/api/v1/users", requireAdmin, async (req: any, res) => {
-    const rows = await pool.query("SELECT * FROM users WHERE org_id = $1 ORDER BY created_at DESC", [req.context.orgId]);
+    const role = String(req.query?.role || '').trim();
+    if (role && role !== 'admin' && role !== 'canvasser') {
+      return res.status(400).json({ error: "Invalid role filter" });
+    }
+
+    const rows = role
+      ? await pool.query("SELECT * FROM users WHERE org_id = $1 AND role = $2 ORDER BY created_at DESC", [req.context.orgId, role])
+      : await pool.query("SELECT * FROM users WHERE org_id = $1 ORDER BY created_at DESC", [req.context.orgId]);
+
     res.json(rows.rows.map(mapUser));
+  });
+
+  // Admin-only invite/create canvasser (Phase 2 dev implementation)
+  // NOTE: This is not a real email invite flow yet. It creates the user inside the org.
+  app.post("/api/v1/users/invite", requireAdmin, async (req: any, res) => {
+    const { name, email, phone, role } = req.body || {};
+    const userRole = (role === 'admin' || role === 'canvasser') ? role : 'canvasser';
+    if (!name || !email) return res.status(400).json({ error: 'name and email required' });
+
+    const id = crypto.randomUUID();
+    const password_hash = 'password';
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `INSERT INTO users (id, org_id, name, email, phone, role, password_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`
+        ,
+        [id, req.context.orgId, name, email, phone || '', userRole, password_hash]
+      );
+
+      await client.query(
+        `INSERT INTO memberships (org_id, user_id, role)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (org_id, user_id) DO NOTHING`,
+        [req.context.orgId, id, userRole]
+      );
+
+      await client.query(
+        `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+         VALUES ('user.invite', $1, $2, $3)`,
+        [req.context.userId, req.context.orgId, { invited_user_id: id, email, role: userRole }]
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      // unique(org_id,email) violation
+      return res.status(409).json({ error: 'User already exists in org' });
+    } finally {
+      client.release();
+    }
+
+    const created = await pool.query("SELECT * FROM users WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
+    return res.status(201).json(mapUser(created.rows[0]));
   });
 
   // -------------------------
