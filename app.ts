@@ -126,7 +126,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 
   // Deployment marker: helps confirm which code is actually running in Railway.
   // Safe to expose; contains no secrets.
-  const DEPLOY_MARKER = 'deploy-marker-2026-02-16-ctx-v1';
+  const DEPLOY_MARKER = 'deploy-marker-2026-02-19-users-invite-v1';
   app.get('/__version', (_req, res) => {
     res.status(200).json({ marker: DEPLOY_MARKER });
   });
