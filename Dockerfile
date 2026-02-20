@@ -1,8 +1,7 @@
 FROM node:20-alpine
 
 # XLSX support (security-first): convert XLSX -> CSV in the worker using Python + openpyxl.
-RUN apk add --no-cache python3 py3-pip \
-  && pip3 install --no-cache-dir openpyxl
+RUN apk add --no-cache python3 py3-openpyxl
 
 WORKDIR /app
 
