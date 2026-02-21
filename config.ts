@@ -31,6 +31,13 @@ export const config = {
 
   // Email (optional; during SES sandbox we may not be able to deliver)
   emailFrom: optional("EMAIL_FROM", "noreply@atlaswins.org"),
+
+  // SES API (preferred on hosted platforms where SMTP egress may be blocked)
+  awsRegion: optional("AWS_REGION", optional("AWS_DEFAULT_REGION", "us-east-2")),
+  awsAccessKeyId: optional("AWS_ACCESS_KEY_ID", ""),
+  awsSecretAccessKey: optional("AWS_SECRET_ACCESS_KEY", ""),
+
+  // SMTP fallback (optional)
   smtpHost: optional("SMTP_HOST", ""),
   smtpPort: Number(optional("SMTP_PORT", "587")),
   smtpUser: optional("SMTP_USER", ""),

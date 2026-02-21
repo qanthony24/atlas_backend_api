@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import { config } from '../config';
+import { canUseSesApi, sendEmailViaSes } from './ses';
 
 export function isEmailAllowlisted(recipientEmail: string): boolean {
   const allow = (config.otpEmailAllowlist || '').trim();
@@ -31,20 +32,6 @@ export async function sendOtpEmail(params: {
     return { attempted: false, error: 'Recipient not allowlisted' };
   }
 
-  const transport = nodemailer.createTransport({
-    host: config.smtpHost,
-    port: config.smtpPort,
-    secure: config.smtpPort === 465, // true for 465, false for 587 STARTTLS
-    auth: {
-      user: config.smtpUser,
-      pass: config.smtpPass,
-    },
-    // Avoid hanging HTTP requests if SMTP is misconfigured/unreachable.
-    connectionTimeout: 4000,
-    greetingTimeout: 4000,
-    socketTimeout: 6000,
-  } as any);
-
   const text = [
     'Your Atlas login code:',
     '',
@@ -64,6 +51,37 @@ export async function sendOtpEmail(params: {
     <p><a href="${params.magicLink}">${params.magicLink}</a></p>
     <p><small>This code/link expires in 10 minutes. If you did not request this, you can ignore this email.</small></p>
   `;
+
+  // Prefer SES API because many hosts block outbound SMTP.
+  if (canUseSesApi()) {
+    try {
+      const r = await sendEmailViaSes({
+        to,
+        from: config.emailFrom,
+        subject: 'Your Atlas login code',
+        text,
+        html,
+      });
+      return { attempted: true, messageId: r.messageId };
+    } catch (err: any) {
+      return { attempted: true, error: err?.message || String(err) };
+    }
+  }
+
+  // SMTP fallback
+  if (!config.smtpHost || !config.smtpUser || !config.smtpPass) {
+    return { attempted: false, error: 'SES not configured and SMTP not configured' };
+  }
+
+  const transport = nodemailer.createTransport({
+    host: config.smtpHost,
+    port: config.smtpPort,
+    secure: config.smtpPort === 465,
+    auth: { user: config.smtpUser, pass: config.smtpPass },
+    connectionTimeout: 4000,
+    greetingTimeout: 4000,
+    socketTimeout: 6000,
+  } as any);
 
   try {
     const info = await transport.sendMail({
