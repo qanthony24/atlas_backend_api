@@ -13,5 +13,6 @@ export const createQueueConnection = () =>
   });
 
 export const createImportQueue = (connection: IORedis) => {
+  // NOTE: queue name must match the Worker name in worker.ts
   return new Queue('import_voters', { connection });
 };

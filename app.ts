@@ -12,6 +12,8 @@ import path from "node:path";
 import { authMiddleware, requireAdmin, requireInternal } from "./middleware/auth";
 import { config } from "./config";
 import { ensureBucket, putObject } from "./storage";
+import { createQueueConnection } from './queue';
+import { Queue } from 'bullmq';
 import { createOtpChallenge, consumeOtpChallengeByCode, consumeOtpChallengeByToken, formatMagicToken } from "./utils/otp";
 import { sendOtpEmail } from "./utils/email";
 
@@ -882,6 +884,20 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Internal (platform admin)
   // -------------------------
+  app.get("/api/v1/internal/queues/import_voters/counts", requireInternal, async (_req: any, res) => {
+    try {
+      // BullMQ stores queue metadata in Redis. This endpoint proves whether jobs are landing in Redis.
+      const connection = createQueueConnection();
+      const q = new Queue('import_voters', { connection });
+      const counts = await q.getJobCounts('waiting', 'active', 'delayed', 'failed', 'completed', 'paused');
+      await q.close();
+      connection.disconnect();
+      return res.json({ queue: 'import_voters', counts });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to inspect queue', details: err?.message || String(err) });
+    }
+  });
+
   app.get("/api/v1/internal/organizations", requireInternal, async (_req: any, res) => {
     const orgs = await pool.query("SELECT * FROM organizations ORDER BY created_at DESC LIMIT 200");
     res.json(orgs.rows.map(mapOrg));
