@@ -150,6 +150,11 @@ CREATE INDEX IF NOT EXISTS idx_assignments_org_id ON assignments(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_canvasser ON assignments(canvasser_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_org_id ON interactions(org_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_voter_id ON interactions(voter_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_org_occurred_at ON interactions(org_id, occurred_at DESC);
+
+-- Ensure at most one survey_responses row per interaction (retry-safe)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_responses_org_interaction_id ON survey_responses(org_id, interaction_id);
+
 CREATE INDEX IF NOT EXISTS idx_import_jobs_org_id ON import_jobs(org_id);
 
 INSERT INTO organizations (id, name, status, plan_id)

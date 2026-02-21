@@ -554,16 +554,6 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     const clientUUID = body.client_interaction_uuid;
 
     if (!clientUUID) return res.status(400).json({ error: "client_interaction_uuid required" });
-
-    const existing = await pool.query(
-      "SELECT * FROM interactions WHERE org_id = $1 AND client_interaction_uuid = $2 LIMIT 1",
-      [req.context.orgId, clientUUID]
-    );
-    if (existing.rows[0]) {
-      return res.status(200).json(mapInteraction(existing.rows[0]));
-    }
-
-    const id = crypto.randomUUID();
     if (!body.voter_id) return res.status(400).json({ error: 'voter_id required' });
     if (!body.result_code) return res.status(400).json({ error: 'result_code required' });
 
@@ -571,17 +561,23 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     const channel = body.channel || 'canvass';
 
     const client = await pool.connect();
+    let inserted = false;
+    let interactionId: string | null = null;
+
     try {
       await client.query('BEGIN');
 
-      await client.query(
+      const insert = await client.query(
         `
         INSERT INTO interactions
-        (id, org_id, user_id, voter_id, assignment_id, occurred_at, channel, result_code, notes, client_interaction_uuid)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          (id, org_id, user_id, voter_id, assignment_id, occurred_at, channel, result_code, notes, client_interaction_uuid)
+        VALUES
+          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (org_id, client_interaction_uuid) DO NOTHING
+        RETURNING id
         `,
         [
-          id,
+          crypto.randomUUID(),
           req.context.orgId,
           req.context.userId,
           body.voter_id,
@@ -594,11 +590,27 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         ]
       );
 
-      if (body.survey_responses && typeof body.survey_responses === 'object') {
-        await client.query(
-          `INSERT INTO survey_responses (org_id, interaction_id, responses) VALUES ($1,$2,$3)`,
-          [req.context.orgId, id, body.survey_responses]
+      if (insert.rows[0]) {
+        inserted = true;
+        interactionId = insert.rows[0].id;
+
+        if (body.survey_responses && typeof body.survey_responses === 'object') {
+          await client.query(
+            `
+            INSERT INTO survey_responses (org_id, interaction_id, responses)
+            VALUES ($1,$2,$3)
+            ON CONFLICT (org_id, interaction_id) DO NOTHING
+            `,
+            [req.context.orgId, interactionId, body.survey_responses]
+          );
+        }
+      } else {
+        // Duplicate submission; keep the first record (append-only semantics)
+        const existing = await client.query(
+          `SELECT id FROM interactions WHERE org_id = $1 AND client_interaction_uuid = $2 LIMIT 1`,
+          [req.context.orgId, clientUUID]
         );
+        interactionId = existing.rows[0]?.id || null;
       }
 
       await client.query('COMMIT');
@@ -609,7 +621,9 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       client.release();
     }
 
-    const created = await pool.query(
+    if (!interactionId) return res.status(500).json({ error: 'Failed to resolve interaction id' });
+
+    const row = await pool.query(
       `
       SELECT i.*, sr.responses AS survey_responses
       FROM interactions i
@@ -618,10 +632,108 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
        AND sr.interaction_id = i.id
       WHERE i.id = $1 AND i.org_id = $2
       `,
-      [id, req.context.orgId]
+      [interactionId, req.context.orgId]
     );
 
-    res.status(201).json(mapInteraction(created.rows[0]));
+    return res.status(inserted ? 201 : 200).json(mapInteraction(row.rows[0]));
+  });
+
+  // Bulk interactions: idempotent by (org_id, client_interaction_uuid)
+  app.post("/api/v1/interactions/bulk", async (req: any, res) => {
+    const body = req.body;
+    const items = Array.isArray(body) ? body : body?.interactions;
+
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ error: 'Expected an array of interactions or { interactions: [...] }' });
+    }
+    if (items.length === 0) {
+      return res.json({ inserted_count: 0, duplicate_count: 0 });
+    }
+
+    // Basic per-item validation (fast fail)
+    for (const [idx, it] of items.entries()) {
+      if (!it?.client_interaction_uuid) return res.status(400).json({ error: `items[${idx}].client_interaction_uuid required` });
+      if (!it?.voter_id) return res.status(400).json({ error: `items[${idx}].voter_id required` });
+      if (!it?.result_code) return res.status(400).json({ error: `items[${idx}].result_code required` });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // Build a single INSERT ... VALUES ... ON CONFLICT DO NOTHING
+      const cols = '(id, org_id, user_id, voter_id, assignment_id, occurred_at, channel, result_code, notes, client_interaction_uuid)';
+      const valuesSql: string[] = [];
+      const params: any[] = [];
+
+      for (const it of items) {
+        const occurredAt = it.occurred_at || new Date().toISOString();
+        const channel = it.channel || 'canvass';
+        const base = params.length;
+        valuesSql.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10})`);
+        params.push(
+          crypto.randomUUID(),
+          req.context.orgId,
+          req.context.userId,
+          it.voter_id,
+          it.assignment_id || null,
+          occurredAt,
+          channel,
+          it.result_code,
+          it.notes || null,
+          it.client_interaction_uuid
+        );
+      }
+
+      const insertedRows = await client.query(
+        `
+        INSERT INTO interactions ${cols}
+        VALUES ${valuesSql.join(',')}
+        ON CONFLICT (org_id, client_interaction_uuid) DO NOTHING
+        RETURNING id, client_interaction_uuid
+        `,
+        params
+      );
+
+      // Insert survey responses for newly-created interactions only
+      const surveyValueSql: string[] = [];
+      const surveyParams: any[] = [];
+      for (const row of insertedRows.rows) {
+        const src = items.find((x: any) => x.client_interaction_uuid === row.client_interaction_uuid);
+        if (src?.survey_responses && typeof src.survey_responses === 'object') {
+          const base = surveyParams.length;
+          surveyValueSql.push(`($${base + 1},$${base + 2},$${base + 3})`);
+          surveyParams.push(req.context.orgId, row.id, src.survey_responses);
+        }
+      }
+      if (surveyValueSql.length > 0) {
+        await client.query(
+          `
+          INSERT INTO survey_responses (org_id, interaction_id, responses)
+          VALUES ${surveyValueSql.join(',')}
+          ON CONFLICT (org_id, interaction_id) DO NOTHING
+          `,
+          surveyParams
+        );
+      }
+
+      await client.query('COMMIT');
+
+      const inserted_count = insertedRows.rows.length;
+      const duplicate_count = items.length - inserted_count;
+
+      return res.status(200).json({
+        inserted_count,
+        duplicate_count,
+        inserted_client_uuids: insertedRows.rows.map((r: any) => r.client_interaction_uuid),
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   // -------------------------
