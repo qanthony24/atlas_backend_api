@@ -6,10 +6,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node --import tsx server.ts",
-    "worker": "node --import tsx worker.ts",
-	"start": "node --import dotenv/config --import tsx server.ts",
-  "worker": "node --import dotenv/config --import tsx worker.ts"
+    "start": "node --import dotenv/config --import tsx server.ts",
+    "worker": "node --import dotenv/config --import tsx worker.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.540.0",
@@ -22,6 +20,7 @@
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.15",
     "pg": "^8.11.3",
     "tsx": "^4.7.0"
   },

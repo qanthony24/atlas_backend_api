@@ -144,7 +144,7 @@ security:
 paths:
   /auth/login:
     post:
-      summary: Authenticate user
+      summary: Authenticate user (password)
       security: []
       requestBody:
         required: true
@@ -159,6 +159,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LoginResponse'
+
+  /auth/otp/request:
+    post:
+      summary: Request OTP + magic link (always returns ok)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+              required: [email]
+      responses:
+        '200':
+          description: Request accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                required: [ok]
+
+  /auth/otp/verify:
+    post:
+      summary: Verify OTP code or magic-link token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, description: 6-digit code }
+                token: { type: string, description: magic-link token }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid or expired code/token
 
   /auth/switch-role:
     post:

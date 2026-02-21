@@ -16,6 +16,8 @@ export const config = {
   // App
   nodeEnv: optional("NODE_ENV", "development"),
   port: Number(optional("PORT", "3000")),
+  // Used to build magic links (front-end URL)
+  appBaseUrl: optional("APP_BASE_URL", "https://app.atlaswins.org"),
 
   // Auth
   jwtSecret: optional("JWT_SECRET", "dev_secret"),
@@ -26,6 +28,17 @@ export const config = {
   // Database / Redis (these SHOULD be required in prod)
   databaseUrl: required("DATABASE_URL"),
   redisUrl: required("REDIS_URL"),
+
+  // Email (optional; during SES sandbox we may not be able to deliver)
+  emailFrom: optional("EMAIL_FROM", "noreply@atlaswins.org"),
+  smtpHost: optional("SMTP_HOST", ""),
+  smtpPort: Number(optional("SMTP_PORT", "587")),
+  smtpUser: optional("SMTP_USER", ""),
+  smtpPass: optional("SMTP_PASS", ""),
+
+  // If set, we will only attempt OTP email delivery when recipient is allowlisted.
+  // Comma-separated emails/domains, e.g. "admin@example.com,@atlaswins.org"
+  otpEmailAllowlist: optional("OTP_EMAIL_ALLOWLIST", ""),
 
   // S3-compatible object storage (Cloudflare R2)
   s3Endpoint: required("S3_ENDPOINT"),

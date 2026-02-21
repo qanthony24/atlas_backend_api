@@ -12,6 +12,8 @@ import path from "node:path";
 import { authMiddleware, requireAdmin, requireInternal } from "./middleware/auth";
 import { config } from "./config";
 import { ensureBucket, putObject } from "./storage";
+import { createOtpChallenge, consumeOtpChallengeByCode, consumeOtpChallengeByToken, formatMagicToken } from "./utils/otp";
+import { sendOtpEmail } from "./utils/email";
 
 export interface ImportQueue {
   add: (name: string, data: any) => Promise<any>;
@@ -189,6 +191,76 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     });
 
     res.json({ token, user: mapUser(user), org: mapOrg(org.rows[0]) });
+  });
+
+  // OTP / Magic-link login (public)
+  // - Always returns 200 to avoid account enumeration.
+  // - During SES sandbox, email delivery may fail; we still generate the challenge.
+  app.post('/api/v1/auth/otp/request', async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) return res.status(200).json({ ok: true });
+
+    // Only for existing users. If not found, return ok anyway.
+    const found = await pool.query('SELECT id FROM users WHERE email = $1 LIMIT 1', [email]);
+    if (!found.rows[0]) return res.status(200).json({ ok: true });
+
+    const redis = new IORedis(config.redisUrl);
+    try {
+      const challenge = await createOtpChallenge(redis, email, 600);
+      const magicToken = formatMagicToken(challenge);
+      const magicLink = `${config.appBaseUrl}/#/login?token=${encodeURIComponent(magicToken)}`;
+
+      const sendRes = await sendOtpEmail({ to: email, code: challenge.code, magicLink });
+      // Never send code/token back to client.
+      console.log('[otp.request]', {
+        email,
+        attempted: sendRes.attempted,
+        messageId: sendRes.messageId,
+        error: sendRes.error,
+      });
+
+      return res.status(200).json({ ok: true });
+    } finally {
+      await redis.quit();
+    }
+  });
+
+  app.post('/api/v1/auth/otp/verify', async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const code = String(req.body?.code || '').trim();
+    const token = String(req.body?.token || '').trim();
+
+    const redis = new IORedis(config.redisUrl);
+    try {
+      let ok = false;
+      let resolvedEmail = email;
+
+      if (token) {
+        const r = await consumeOtpChallengeByToken(redis, token);
+        ok = r.ok;
+        if (r.email) resolvedEmail = r.email;
+      } else {
+        const r = await consumeOtpChallengeByCode(redis, email, code);
+        ok = r.ok;
+      }
+
+      if (!ok || !resolvedEmail) {
+        return res.status(401).json({ error: 'Invalid or expired code' });
+      }
+
+      const result = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [resolvedEmail]);
+      const user = result.rows[0];
+      if (!user) return res.status(401).json({ error: 'Invalid or expired code' });
+
+      const org = await pool.query('SELECT * FROM organizations WHERE id = $1', [user.org_id]);
+      const jwtToken = jwt.sign({ sub: user.id, org_id: user.org_id, role: user.role }, config.jwtSecret, {
+        expiresIn: '12h',
+      });
+
+      return res.status(200).json({ token: jwtToken, user: mapUser(user), org: mapOrg(org.rows[0]) });
+    } finally {
+      await redis.quit();
+    }
   });
 
   // Everything below here requires auth
