@@ -39,7 +39,11 @@ export async function sendOtpEmail(params: {
       user: config.smtpUser,
       pass: config.smtpPass,
     },
-  });
+    // Avoid hanging HTTP requests if SMTP is misconfigured/unreachable.
+    connectionTimeout: 4000,
+    greetingTimeout: 4000,
+    socketTimeout: 6000,
+  } as any);
 
   const text = [
     'Your Atlas login code:',

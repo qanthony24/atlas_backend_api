@@ -210,14 +210,24 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       const magicToken = formatMagicToken(challenge);
       const magicLink = `${config.appBaseUrl}/#/login?token=${encodeURIComponent(magicToken)}`;
 
-      const sendRes = await sendOtpEmail({ to: email, code: challenge.code, magicLink });
-      // Never send code/token back to client.
-      console.log('[otp.request]', {
-        email,
-        attempted: sendRes.attempted,
-        messageId: sendRes.messageId,
-        error: sendRes.error,
-      });
+      // Send email in the background so the HTTP request never blocks on SMTP.
+      // (SES sandbox / misconfig should not freeze the UI.)
+      void sendOtpEmail({ to: email, code: challenge.code, magicLink })
+        .then((sendRes) => {
+          console.log('[otp.request]', {
+            email,
+            attempted: sendRes.attempted,
+            messageId: sendRes.messageId,
+            error: sendRes.error,
+          });
+        })
+        .catch((err: any) => {
+          console.log('[otp.request]', {
+            email,
+            attempted: true,
+            error: err?.message || String(err),
+          });
+        });
 
       return res.status(200).json({ ok: true });
     } finally {
