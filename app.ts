@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import IORedis from "ioredis";
 import fs from "node:fs";
 import path from "node:path";
+import YAML from "yaml";
 
 import { authMiddleware, requireAdmin, requireInternal } from "./middleware/auth";
 import { config } from "./config";
@@ -117,6 +118,16 @@ function findOpenApiYamlPath(): string | null {
   return null;
 }
 
+function loadOpenApiSpec(): { yamlPath: string; rawYaml: string; json: any } {
+  const specPath = findOpenApiYamlPath();
+  if (!specPath) {
+    throw new Error('openapi.yaml not found');
+  }
+  const rawYaml = fs.readFileSync(specPath, 'utf8');
+  const json = YAML.parse(rawYaml);
+  return { yamlPath: specPath, rawYaml, json };
+}
+
 export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   const app = express();
   const upload = multer({ storage: multer.memoryStorage() });
@@ -152,24 +163,106 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       res.status(503).json({ status: "not_ready", error: err?.message || String(err) });
     }
   });
+
+  // -------------------------
+  // Internal (staff-only) diagnostics namespace
+  // -------------------------
+  // This exists to satisfy Phase 2: staff-protected internal namespace.
+  // Never expose secrets here; keep payloads bounded.
+  app.get('/internal/health', requireInternal, (_req, res) => {
+    res.status(200).json({
+      status: 'ok',
+      marker: DEPLOY_MARKER,
+      now: new Date().toISOString(),
+    });
+  });
+
+  app.get('/internal/ready', requireInternal, async (_req, res) => {
+    const checks: Record<string, any> = {};
+    try {
+      await pool.query('SELECT 1');
+      checks.db = 'ok';
+    } catch (e: any) {
+      checks.db = { status: 'fail', error: e?.message || String(e) };
+    }
+
+    try {
+      const redis = new IORedis(config.redisUrl);
+      await redis.ping();
+      await redis.quit();
+      checks.redis = 'ok';
+    } catch (e: any) {
+      checks.redis = { status: 'fail', error: e?.message || String(e) };
+    }
+
+    try {
+      await ensureBucket(s3Client, config.s3Bucket);
+      checks.storage = 'ok';
+    } catch (e: any) {
+      checks.storage = { status: 'fail', error: e?.message || String(e) };
+    }
+
+    const allOk = Object.values(checks).every((v: any) => v === 'ok');
+    res.status(allOk ? 200 : 503).json({ status: allOk ? 'ready' : 'not_ready', checks });
+  });
+
   // (health route defined above)
   // -------------------------
   // Serve OpenAPI YAML as RAW YAML (never HTML)
   // -------------------------
   app.get("/openapi.yaml", (_req, res) => {
     try {
-      const specPath = findOpenApiYamlPath();
-      if (!specPath) {
+      const { rawYaml } = loadOpenApiSpec();
+      return res.status(200).type("text/yaml").send(rawYaml);
+    } catch (err: any) {
+      if ((err?.message || '').includes('not found')) {
         return res.status(404).type("text/plain").send("openapi.yaml not found");
       }
-      const yaml = fs.readFileSync(specPath, "utf8");
-      return res.status(200).type("text/yaml").send(yaml);
-    } catch (err: any) {
       return res.status(500).json({
         error: "Failed to load openapi.yaml",
         details: err?.message || String(err),
       });
     }
+  });
+
+  // Serve OpenAPI as JSON for tooling that expects /openapi.json
+  app.get("/openapi.json", (_req, res) => {
+    try {
+      const { json } = loadOpenApiSpec();
+      return res.status(200).json(json);
+    } catch (err: any) {
+      if ((err?.message || '').includes('not found')) {
+        return res.status(404).type("text/plain").send("openapi.yaml not found");
+      }
+      return res.status(500).json({
+        error: "Failed to load openapi spec",
+        details: err?.message || String(err),
+      });
+    }
+  });
+
+  // Minimal Swagger UI (no backend deps). Safe in Phase 2.
+  app.get('/docs', (_req, res) => {
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas API Docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: '/openapi.yaml',
+        dom_id: '#swagger-ui'
+      });
+    </script>
+  </body>
+</html>`;
+    res.status(200).type('text/html').send(html);
   });
 
   // -------------------------
