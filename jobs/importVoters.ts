@@ -60,12 +60,19 @@ export const processImportJob = async (
     payload: ImportJobPayload
 ) => {
     const { jobId, orgId, userId, voters, fileKey } = payload;
+    const startedAt = new Date().toISOString();
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query(
-            `UPDATE import_jobs SET status = 'processing', updated_at = NOW() WHERE id = $1 AND org_id = $2`,
-            [jobId, orgId]
+            `
+            UPDATE import_jobs
+               SET status = 'processing',
+                   updated_at = NOW(),
+                   metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+             WHERE id = $1 AND org_id = $2
+            `,
+            [jobId, orgId, { started_at: startedAt, phase: 'starting', processed_rows: 0, total_rows: null }]
         );
         await client.query(
             `INSERT INTO platform_events (org_id, user_id, event_type, metadata)
@@ -75,6 +82,16 @@ export const processImportJob = async (
 
         let rows: Array<Record<string, any>> = voters || [];
         if (fileKey && s3Client) {
+            await client.query(
+                `
+                UPDATE import_jobs
+                   SET updated_at = NOW(),
+                       metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+                 WHERE id = $1 AND org_id = $2
+                `,
+                [jobId, orgId, { started_at: startedAt, phase: 'reading_file', processed_rows: 0, total_rows: null }]
+            );
+
             const body = await getObjectBody(s3Client, config.s3Bucket, fileKey);
 
             // Support both CSV and XLSX uploads. XLSX is converted to CSV in the worker (python3 + openpyxl)
@@ -82,8 +99,29 @@ export const processImportJob = async (
             const lower = String(fileKey).toLowerCase();
             const csvBuffer = lower.endsWith('.xlsx') ? await xlsxBufferToCsv(body) : body;
 
+            await client.query(
+                `
+                UPDATE import_jobs
+                   SET updated_at = NOW(),
+                       metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+                 WHERE id = $1 AND org_id = $2
+                `,
+                [jobId, orgId, { started_at: startedAt, phase: 'parsing_rows', processed_rows: 0, total_rows: null }]
+            );
+
             rows = parseCsvToVoters(csvBuffer.toString('utf-8'));
         }
+
+        const totalRows = rows.length;
+        await client.query(
+            `
+            UPDATE import_jobs
+               SET updated_at = NOW(),
+                   metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+             WHERE id = $1 AND org_id = $2
+            `,
+            [jobId, orgId, { started_at: startedAt, phase: 'writing_voters', processed_rows: 0, total_rows: totalRows }]
+        );
 
         let importedCount = 0;
         for (const row of rows) {
@@ -143,7 +181,31 @@ export const processImportJob = async (
                 ]
             );
             importedCount++;
+
+            // Emit progress every N rows to keep UI responsive without hammering Postgres.
+            if (importedCount % 250 === 0) {
+                await client.query(
+                    `
+                    UPDATE import_jobs
+                       SET updated_at = NOW(),
+                           metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+                     WHERE id = $1 AND org_id = $2
+                    `,
+                    [jobId, orgId, { started_at: startedAt, phase: 'writing_voters', processed_rows: importedCount, total_rows: totalRows }]
+                );
+            }
         }
+
+        // Final progress update (100%) before marking completed
+        await client.query(
+            `
+            UPDATE import_jobs
+               SET updated_at = NOW(),
+                   metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{progress}', $3::jsonb, true)
+             WHERE id = $1 AND org_id = $2
+            `,
+            [jobId, orgId, { started_at: startedAt, phase: 'finalizing', processed_rows: importedCount, total_rows: totalRows }]
+        );
 
         await client.query(
             `UPDATE import_jobs
