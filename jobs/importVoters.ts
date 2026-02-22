@@ -16,21 +16,51 @@ export interface ImportJobPayload {
 
 const mapHeaderToField = (header: string): string | null => {
     const h = header.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (['REGNUMBER', 'VOTERID', 'STATEID', 'VANID', 'EXTERNALID', 'ID', 'LALISTID'].includes(h)) return 'external_id';
+
+    // Stable external voter id (required for upsert)
+    if (
+        [
+            'REGISTRATIONNUMBER',
+            'REGISTRATIONNUM',
+            'REGNUMBER',
+            'VOTERID',
+            'STATEVOTERID',
+            'STATEID',
+            'VANID',
+            'EXTERNALID',
+            'ID',
+            'LALISTID',
+        ].includes(h)
+    )
+        return 'external_id';
+
+    // Names
     if (['FIRSTNAME', 'NAMEFIRST', 'FNAME', 'FIRST'].includes(h)) return 'first_name';
     if (['LASTNAME', 'NAMELAST', 'LNAME', 'LAST'].includes(h)) return 'last_name';
     if (['MIDDLENAME', 'NAMEMID', 'MNAME', 'MID', 'MI'].includes(h)) return 'middle_name';
-    if (['SUFFIX', 'NAMESUFFIX', 'SFX'].includes(h)) return 'suffix';
+    if (['SUFFIX', 'NAMESUFFIX', 'PERSONALNAMESUFFIX', 'SFX'].includes(h)) return 'suffix';
+
+    // Demographics
     if (['AGE', 'BIRTHYEAR', 'DOB'].includes(h)) return 'age';
-    if (['GENDER', 'SEX'].includes(h)) return 'gender';
-    if (['RACE', 'ETHNICITY'].includes(h)) return 'race';
+    if (['GENDER', 'SEX', 'PERSONALSEX'].includes(h)) return 'gender';
+    if (['RACE', 'ETHNICITY', 'PERSONALRACE'].includes(h)) return 'race';
+    if (['PARTY', 'PARTYID', 'POLITICALPARTY', 'PARTYAFFILIATION', 'REGISTRATIONPOLITICALPARTYCODE'].includes(h)) return 'party';
+
+    // Phone
     if (h.includes('PHONE') || h.includes('MOBILE') || h.includes('CELL')) return 'phone';
-    if (['ADDRESS', 'RESADDRESS1', 'STREETADDRESS', 'ADDR1', 'RESIDENCEADDRESS', 'STREET', 'ADDRESS1'].includes(h)) return 'address';
-    if (['UNIT', 'APT', 'APARTMENT', 'SUITE', 'ADDRESS2', 'RESADDRESS2', 'ADDR2', 'RESADDRESSLINE2'].includes(h)) return 'unit';
-    if (['CITY', 'RESCITY', 'RESIDENCECITY'].includes(h)) return 'city';
-    if (['STATE', 'RESSTATE', 'ST'].includes(h)) return 'state';
-    if (['ZIP', 'ZIPCODE', 'RESZIP', 'POSTALCODE', 'ZIP5'].includes(h)) return 'zip';
-    if (['PARTY', 'PARTYID', 'POLITICALPARTY', 'PARTYAFFILIATION'].includes(h)) return 'party';
+
+    // Address fields (Louisiana exports often split these)
+    if (['RESIDENCEHOUSENUMBER'].includes(h)) return 'res_house_number';
+    if (['RESIDENCEHOUSEFRACTION'].includes(h)) return 'res_house_fraction';
+    if (['RESIDENCESTREETDIRECTION'].includes(h)) return 'res_street_direction';
+    if (['RESIDENCESTREETNAME'].includes(h)) return 'res_street_name';
+
+    if (['ADDRESS', 'RESADDRESS1', 'STREETADDRESS', 'ADDR1', 'RESIDENCEADDRESS', 'STREET', 'ADDRESS1', 'RESIDENCEADDRESSLINE1'].includes(h)) return 'address';
+    if (['UNIT', 'APT', 'APARTMENT', 'SUITE', 'ADDRESS2', 'RESADDRESS2', 'ADDR2', 'RESADDRESSLINE2', 'RESIDENCEAPARTMENTNUMBER'].includes(h)) return 'unit';
+    if (['CITY', 'RESCITY', 'RESIDENCECITY', 'RESIDENCECITYNAME'].includes(h)) return 'city';
+    if (['STATE', 'RESSTATE', 'ST', 'RESIDENCESTATE'].includes(h)) return 'state';
+    if (['ZIP', 'ZIPCODE', 'RESZIP', 'POSTALCODE', 'ZIP5', 'RESIDENCEZIPCODE5'].includes(h)) return 'zip';
+
     return null;
 };
 
@@ -135,9 +165,23 @@ export const processImportJob = async (
 
             const firstName = row.first_name || row.firstName || 'Unknown';
             const lastName = row.last_name || row.lastName || 'Unknown';
-            const address = row.address || 'Unknown';
+
+            // Compose residence address if the file provides split components.
+            // (Most LA exports split house number + street name.)
+            const composedAddress = [
+                row.res_house_number,
+                row.res_house_fraction,
+                row.res_street_direction,
+                row.res_street_name,
+            ]
+                .map((x: any) => String(x || '').trim())
+                .filter((x: string) => x.length > 0)
+                .join(' ');
+
+            const address = (row.address && String(row.address).trim()) || composedAddress || 'Unknown';
             const city = row.city || 'Unknown';
             const zip = row.zip || '';
+
             await client.query(
                 `INSERT INTO voters (
                     org_id, external_id, first_name, middle_name, last_name, suffix,
