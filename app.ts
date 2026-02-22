@@ -954,9 +954,29 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     const jobId = crypto.randomUUID();
     const extRaw = path.extname(req.file.originalname || '').toLowerCase();
     const ext = extRaw && extRaw.length <= 10 ? extRaw : '.csv';
+
+    // File hash for duplicate detection (same file uploaded again)
+    const fileHash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+
     const key = `imports/${req.context.orgId}/${jobId}${ext}`;
 
     await putObject(s3Client, config.s3Bucket, key, req.file.buffer);
+
+    // Check whether this exact file was already uploaded+processed before.
+    const prior = await pool.query(
+      `
+      SELECT id, created_at, status
+        FROM import_jobs
+       WHERE org_id = $1
+         AND type = 'import_voters'
+         AND (metadata->>'file_hash') = $2
+       ORDER BY created_at DESC
+       LIMIT 1
+      `,
+      [req.context.orgId, fileHash]
+    );
+
+    const priorJob = prior.rows[0] || null;
 
     await pool.query(
       `
@@ -970,13 +990,25 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         'import_voters',
         'pending',
         key,
-        { key, filename: req.file.originalname, size: req.file.size },
+        {
+          key,
+          filename: req.file.originalname,
+          size: req.file.size,
+          file_hash: fileHash,
+          duplicate_of_job_id: priorJob?.id || null,
+          duplicate_of_created_at: priorJob?.created_at || null,
+          duplicate_of_status: priorJob?.status || null,
+        },
       ]
     );
 
     await importQueue.add('import-voters-file', { jobId, orgId: req.context.orgId, userId: req.context.userId, fileKey: key });
 
-    res.status(202).json({ id: jobId, status: 'pending' });
+    res.status(202).json({
+      id: jobId,
+      status: 'pending',
+      duplicate_of_job_id: priorJob?.id || null,
+    });
   });
 
   // -------------------------
