@@ -1,9 +1,13 @@
 import { Readable } from 'stream';
 import csv from 'csv-parser';
 
-// Clean Louisiana voter file headers (e.g., remove quotes, normalize)
+// Clean Louisiana voter file headers.
+// Louisiana exports can include commas inside the header label (e.g. "RESIDENTIAL ADDRESS, LINE 1").
+// Requirement: split on FIRST comma, then normalize.
 export const cleanLouisianaHeader = (header: string): string => {
-  return header.replace(/"/g, '').trim().toUpperCase();
+  const raw = String(header ?? '');
+  const first = raw.split(',', 1)[0];
+  return first.replace(/"/g, '').trim().toUpperCase();
 };
 
 // Parse a CSV line, handling quoted fields and commas inside quotes

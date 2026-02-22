@@ -124,8 +124,15 @@ export const processImportJob = async (
         );
 
         let importedCount = 0;
+        let skippedMissingExternalId = 0;
         for (const row of rows) {
-            const externalId = row.external_id || row.externalId || `IMP-${crypto.randomUUID()}`;
+            // External ID is required for stable upserts. If we can't map it, skip the row.
+            const externalId = row.external_id || row.externalId;
+            if (!externalId || String(externalId).trim() === '') {
+                skippedMissingExternalId++;
+                continue;
+            }
+
             const firstName = row.first_name || row.firstName || 'Unknown';
             const lastName = row.last_name || row.lastName || 'Unknown';
             const address = row.address || 'Unknown';
@@ -211,12 +218,12 @@ export const processImportJob = async (
             `UPDATE import_jobs
              SET status = 'completed', updated_at = NOW(), result = $1
              WHERE id = $2 AND org_id = $3`,
-            [{ imported_count: importedCount }, jobId, orgId]
+            [{ imported_count: importedCount, skipped_missing_external_id: skippedMissingExternalId, total_rows: totalRows }, jobId, orgId]
         );
         await client.query(
             `INSERT INTO platform_events (org_id, user_id, event_type, metadata)
              VALUES ($1, $2, 'import.completed', $3)`,
-            [orgId, userId, { job_id: jobId, count: importedCount }]
+            [orgId, userId, { job_id: jobId, count: importedCount, skipped_missing_external_id: skippedMissingExternalId, total_rows: totalRows }]
         );
         await client.query(
             `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
