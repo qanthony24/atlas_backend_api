@@ -144,14 +144,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     metadata JSONB
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
-CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);
-CREATE INDEX IF NOT EXISTS idx_voters_external_id ON voters(external_id);
-CREATE INDEX IF NOT EXISTS idx_voters_org_source ON voters(org_id, source);
-CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_into_voter_id);
-
 -- Back-compat migrations (schema.sql is run at startup)
 -- IMPORTANT: schema.sql runs on every boot (API + worker). Keep these idempotent.
 DO $$
@@ -186,6 +178,15 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_voters_org_external_id_not_null
   ON voters(org_id, external_id)
   WHERE external_id IS NOT NULL;
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
+CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);
+CREATE INDEX IF NOT EXISTS idx_voters_external_id ON voters(external_id);
+CREATE INDEX IF NOT EXISTS idx_voters_org_source ON voters(org_id, source);
+CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_into_voter_id);
 CREATE INDEX IF NOT EXISTS idx_lists_org_id ON walk_lists(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_org_id ON assignments(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_canvasser ON assignments(canvasser_id);
