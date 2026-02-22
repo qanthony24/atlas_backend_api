@@ -269,6 +269,32 @@ export const processImportJob = async (
              VALUES ($1, $2, 'import.completed', $3)`,
             [orgId, userId, { job_id: jobId, count: importedCount, skipped_missing_external_id: skippedMissingExternalId, total_rows: totalRows }]
         );
+        // Create merge alerts (manual review only)
+        // High-confidence match: exact phone number match between a manual lead and an imported voter.
+        // Idempotent via UNIQUE(org_id, lead_voter_id, imported_voter_id).
+        await client.query(
+            `
+            INSERT INTO voter_merge_alerts (org_id, lead_voter_id, imported_voter_id, reason, status)
+            SELECT lv.org_id,
+                   lv.id AS lead_voter_id,
+                   iv.id AS imported_voter_id,
+                   'phone_match' AS reason,
+                   'open' AS status
+              FROM voters lv
+              JOIN voters iv
+                ON iv.org_id = lv.org_id
+               AND iv.source = 'import'
+               AND lv.source = 'manual'
+               AND lv.merged_into_voter_id IS NULL
+               AND lv.phone IS NOT NULL
+               AND iv.phone IS NOT NULL
+               AND lv.phone = iv.phone
+             WHERE lv.org_id = $1
+            ON CONFLICT (org_id, lead_voter_id, imported_voter_id) DO NOTHING
+            `,
+            [orgId]
+        );
+
         await client.query(
             `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
              VALUES ('import.success', $1, $2, $3)`,

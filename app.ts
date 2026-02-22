@@ -877,6 +877,46 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   });
 
   // -------------------------
+  // Merge Alerts (Admin)
+  // -------------------------
+  app.get('/api/v1/merge-alerts/count', requireAdmin, async (req: any, res) => {
+    const row = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM voter_merge_alerts WHERE org_id = $1 AND status = 'open'`,
+      [req.context.orgId]
+    );
+    res.json({ open_count: row.rows[0].count });
+  });
+
+  app.get('/api/v1/merge-alerts', requireAdmin, async (req: any, res) => {
+    const status = String(req.query?.status || 'open');
+    if (!['open', 'resolved', 'dismissed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const rows = await pool.query(
+      `
+      SELECT a.*,
+             lv.first_name AS lead_first_name,
+             lv.last_name AS lead_last_name,
+             lv.phone AS lead_phone,
+             iv.external_id AS imported_external_id,
+             iv.first_name AS imported_first_name,
+             iv.last_name AS imported_last_name,
+             iv.phone AS imported_phone
+        FROM voter_merge_alerts a
+        JOIN voters lv ON lv.id = a.lead_voter_id AND lv.org_id = a.org_id
+        JOIN voters iv ON iv.id = a.imported_voter_id AND iv.org_id = a.org_id
+       WHERE a.org_id = $1 AND a.status = $2
+       ORDER BY a.created_at DESC
+       LIMIT 200
+      `,
+      [req.context.orgId, status]
+    );
+
+    res.json({ alerts: rows.rows });
+  });
+
+  // -------------------------
   // Metrics
   // -------------------------
   app.get("/api/v1/metrics/field/summary", requireAdmin, async (req: any, res) => {

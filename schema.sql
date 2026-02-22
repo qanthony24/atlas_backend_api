@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS voters (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS voter_merge_alerts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    lead_voter_id UUID NOT NULL REFERENCES voters(id) ON DELETE CASCADE,
+    imported_voter_id UUID NOT NULL REFERENCES voters(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, lead_voter_id, imported_voter_id)
+);
+
 CREATE TABLE IF NOT EXISTS walk_lists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
@@ -187,6 +199,8 @@ CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);
 CREATE INDEX IF NOT EXISTS idx_voters_external_id ON voters(external_id);
 CREATE INDEX IF NOT EXISTS idx_voters_org_source ON voters(org_id, source);
 CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_into_voter_id);
+CREATE INDEX IF NOT EXISTS idx_merge_alerts_org_status ON voter_merge_alerts(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_merge_alerts_org_created_at ON voter_merge_alerts(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lists_org_id ON walk_lists(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_org_id ON assignments(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_canvasser ON assignments(canvasser_id);
