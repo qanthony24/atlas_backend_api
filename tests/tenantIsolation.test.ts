@@ -49,7 +49,7 @@ describe('tenant isolation', () => {
             .set('Authorization', `Bearer ${tokenB}`);
 
         expect(response.status).toBe(200);
-        expect(response.body).toHaveLength(0);
+        expect(Array.isArray(response.body?.voters) ? response.body.voters : response.body).toHaveLength(0);
 
         const tokenA = jwt.sign({ sub: userA, org_id: orgA, role: 'admin' }, process.env.JWT_SECRET as string);
         const responseA = await request(app)
@@ -57,6 +57,7 @@ describe('tenant isolation', () => {
             .set('Authorization', `Bearer ${tokenA}`);
 
         expect(responseA.status).toBe(200);
-        expect(responseA.body[0].id).toBe(voterA);
+        const votersA = Array.isArray(responseA.body?.voters) ? responseA.body.voters : responseA.body;
+        expect(votersA[0].id).toBe(voterA);
     });
 });

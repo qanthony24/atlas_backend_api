@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createTestPool } from './helpers';
 import { processImportJob } from '../jobs/importVoters';
+import { createRealTestPool } from './realDb';
 
-describe('import jobs', () => {
+// This test needs real Postgres because pg-mem can't parse or execute our upsert inference
+// (`ON CONFLICT (...) WHERE ... DO UPDATE`) and lacks many jsonb semantics.
+const hasRealDb = !!process.env.DATABASE_URL && process.env.DATABASE_URL !== 'postgres://test/test';
+
+(hasRealDb ? describe : describe.skip)('import jobs (postgres integration)', () => {
     let pool: any;
     let orgId: string;
     let userId: string;
     let jobId: string;
 
     beforeAll(async () => {
-        pool = await createTestPool();
+        pool = await createRealTestPool();
         const org = await pool.query(`INSERT INTO organizations (name, status, plan_id) VALUES ('Org A', 'active', 'starter') RETURNING id`);
         orgId = org.rows[0].id;
         const user = await pool.query(
@@ -19,8 +23,8 @@ describe('import jobs', () => {
         userId = user.rows[0].id;
         const job = await pool.query(
             `INSERT INTO import_jobs (org_id, user_id, type, status, metadata)
-             VALUES ($1, $2, 'import_voters', 'pending', $3) RETURNING id`,
-            [orgId, userId, { count: 2 }]
+             VALUES ($1, $2, 'import_voters', 'pending', $3::jsonb) RETURNING id`,
+            [orgId, userId, JSON.stringify({ count: 2 })]
         );
         jobId = job.rows[0].id;
     });

@@ -7,7 +7,8 @@
   },
   "scripts": {
     "start": "node --import dotenv/config --import tsx server.ts",
-    "worker": "node --import dotenv/config --import tsx worker.ts"
+    "worker": "node --import dotenv/config --import tsx worker.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.540.0",
@@ -27,6 +28,10 @@
     "yaml": "^2.8.1"
   },
   "devDependencies": {
-    "typescript": "^5.3.3"
+    "@types/supertest": "^2.0.16",
+    "pg-mem": "^3.0.5",
+    "supertest": "^6.3.4",
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.9"
   }
 }

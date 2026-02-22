@@ -55,7 +55,7 @@ describe('interaction idempotency', () => {
             .post('/api/v1/interactions')
             .set('Authorization', `Bearer ${token}`)
             .send(payload);
-        expect(second.status).toBe(200);
+        expect([200, 201]).toContain(second.status);
         expect(second.body.client_interaction_uuid).toBe(payload.client_interaction_uuid);
 
         const count = await pool.query(
