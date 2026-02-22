@@ -899,10 +899,18 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
              lv.first_name AS lead_first_name,
              lv.last_name AS lead_last_name,
              lv.phone AS lead_phone,
+             lv.address AS lead_address,
+             lv.city AS lead_city,
+             lv.state AS lead_state,
+             lv.zip AS lead_zip,
              iv.external_id AS imported_external_id,
              iv.first_name AS imported_first_name,
              iv.last_name AS imported_last_name,
-             iv.phone AS imported_phone
+             iv.phone AS imported_phone,
+             iv.address AS imported_address,
+             iv.city AS imported_city,
+             iv.state AS imported_state,
+             iv.zip AS imported_zip
         FROM voter_merge_alerts a
         JOIN voters lv ON lv.id = a.lead_voter_id AND lv.org_id = a.org_id
         JOIN voters iv ON iv.id = a.imported_voter_id AND iv.org_id = a.org_id
@@ -914,6 +922,128 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     );
 
     res.json({ alerts: rows.rows });
+  });
+
+  app.patch('/api/v1/merge-alerts/:id', requireAdmin, async (req: any, res) => {
+    const status = String(req.body?.status || '').trim();
+    if (!['open', 'resolved', 'dismissed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const updated = await pool.query(
+      `
+      UPDATE voter_merge_alerts
+         SET status = $1, updated_at = NOW()
+       WHERE id = $2 AND org_id = $3
+       RETURNING *
+      `,
+      [status, req.params.id, req.context.orgId]
+    );
+
+    if (!updated.rows[0]) return res.status(404).json({ error: 'Not found' });
+
+    await pool.query(
+      `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+       VALUES ('merge_alert.update', $1, $2, $3)`,
+      [req.context.userId, req.context.orgId, { alert_id: req.params.id, status }]
+    );
+
+    return res.json({ ok: true });
+  });
+
+  app.post('/api/v1/voters/:leadId/merge-into/:importedId', requireAdmin, async (req: any, res) => {
+    const leadId = req.params.leadId;
+    const importedId = req.params.importedId;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const lead = await client.query(
+        `SELECT * FROM voters WHERE id = $1 AND org_id = $2 LIMIT 1`,
+        [leadId, req.context.orgId]
+      );
+      const imported = await client.query(
+        `SELECT * FROM voters WHERE id = $1 AND org_id = $2 LIMIT 1`,
+        [importedId, req.context.orgId]
+      );
+
+      if (!lead.rows[0] || !imported.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Voter not found' });
+      }
+      if (lead.rows[0].source !== 'manual') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Lead voter must have source=manual' });
+      }
+      if (imported.rows[0].source !== 'import') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Target voter must have source=import' });
+      }
+
+      // Idempotency: if already merged into this target, return ok.
+      if (lead.rows[0].merged_into_voter_id === importedId) {
+        await client.query('COMMIT');
+        return res.json({ ok: true, merged: true, idempotent: true });
+      }
+
+      // Rewire interactions and list_members to preserve canvassing history.
+      const movedInteractions = await client.query(
+        `
+        UPDATE interactions
+           SET voter_id = $1
+         WHERE org_id = $2 AND voter_id = $3
+        `,
+        [importedId, req.context.orgId, leadId]
+      );
+
+      const movedListMembers = await client.query(
+        `
+        UPDATE list_members
+           SET voter_id = $1
+         WHERE org_id = $2 AND voter_id = $3
+        `,
+        [importedId, req.context.orgId, leadId]
+      );
+
+      await client.query(
+        `
+        UPDATE voters
+           SET merged_into_voter_id = $1, updated_at = NOW()
+         WHERE id = $2 AND org_id = $3
+        `,
+        [importedId, leadId, req.context.orgId]
+      );
+
+      // Resolve any open alerts between these two.
+      await client.query(
+        `
+        UPDATE voter_merge_alerts
+           SET status = 'resolved', updated_at = NOW()
+         WHERE org_id = $1 AND lead_voter_id = $2 AND imported_voter_id = $3 AND status = 'open'
+        `,
+        [req.context.orgId, leadId, importedId]
+      );
+
+      await client.query(
+        `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+         VALUES ('voter.merge', $1, $2, $3)`,
+        [req.context.userId, req.context.orgId, {
+          lead_voter_id: leadId,
+          imported_voter_id: importedId,
+          moved_interactions: movedInteractions.rowCount,
+          moved_list_members: movedListMembers.rowCount,
+        }]
+      );
+
+      await client.query('COMMIT');
+      return res.json({ ok: true, merged: true, moved_interactions: movedInteractions.rowCount, moved_list_members: movedListMembers.rowCount });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   // -------------------------
