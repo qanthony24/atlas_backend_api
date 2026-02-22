@@ -458,6 +458,25 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       [req.context.userId, req.context.orgId, { voter_id: id, changes }]
     );
 
+    // If this is a manual lead and phone was set/changed, generate merge alerts immediately.
+    if (typeof changes.phone !== 'undefined' && existing.rows[0].source === 'manual') {
+      const phone = String(changes.phone || '').trim();
+      if (phone) {
+        await pool.query(
+          `
+          INSERT INTO voter_merge_alerts (org_id, lead_voter_id, imported_voter_id, reason, status)
+          SELECT $1, $2, iv.id, 'phone_match', 'open'
+            FROM voters iv
+           WHERE iv.org_id = $1
+             AND iv.source = 'import'
+             AND iv.phone = $3
+          ON CONFLICT (org_id, lead_voter_id, imported_voter_id) DO NOTHING
+          `,
+          [req.context.orgId, id, phone]
+        );
+      }
+    }
+
     const updated = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
     return res.json(mapVoter(updated.rows[0]));
   });
@@ -497,6 +516,23 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         v.geom?.lng ?? null,
       ]
     );
+
+    // Generate merge alerts immediately for high-confidence matches (phone match)
+    // so admins don't have to wait for a future import run.
+    if (v.phone && String(v.phone).trim() !== '') {
+      await pool.query(
+        `
+        INSERT INTO voter_merge_alerts (org_id, lead_voter_id, imported_voter_id, reason, status)
+        SELECT $1, $2, iv.id, 'phone_match', 'open'
+          FROM voters iv
+         WHERE iv.org_id = $1
+           AND iv.source = 'import'
+           AND iv.phone = $3
+        ON CONFLICT (org_id, lead_voter_id, imported_voter_id) DO NOTHING
+        `,
+        [req.context.orgId, id, String(v.phone).trim()]
+      );
+    }
 
     const created = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
     res.status(201).json(mapVoter(created.rows[0]));
