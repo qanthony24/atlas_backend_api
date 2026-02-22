@@ -153,7 +153,21 @@ CREATE INDEX IF NOT EXISTS idx_voters_org_source ON voters(org_id, source);
 CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_into_voter_id);
 
 -- Back-compat migrations (schema.sql is run at startup)
-ALTER TABLE voters ALTER COLUMN external_id DROP NOT NULL;
+-- IMPORTANT: schema.sql runs on every boot (API + worker). Keep these idempotent.
+DO $$
+BEGIN
+  -- Drop NOT NULL only if it is currently set.
+  IF EXISTS (
+    SELECT 1
+      FROM pg_attribute a
+     WHERE a.attrelid = 'voters'::regclass
+       AND a.attname = 'external_id'
+       AND a.attnotnull = true
+  ) THEN
+    ALTER TABLE voters ALTER COLUMN external_id DROP NOT NULL;
+  END IF;
+END $$;
+
 ALTER TABLE voters ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'import';
 ALTER TABLE voters ADD COLUMN IF NOT EXISTS merged_into_voter_id UUID;
 
