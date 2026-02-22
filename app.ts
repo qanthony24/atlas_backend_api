@@ -395,6 +395,73 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     res.json(mapVoter(row.rows[0]));
   });
 
+  // Update voter fields (admin-only). Used by VoterDetailModal "Save changes".
+  app.patch("/api/v1/voters/:id", requireAdmin, async (req: any, res) => {
+    const id = req.params.id;
+    const v = req.body || {};
+
+    const existing = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
+    if (!existing.rows[0]) return res.status(404).json({ error: 'Not found' });
+
+    // Only allow updating a controlled set of fields.
+    // NOTE: We intentionally do not allow changing source or merged_into_voter_id via this endpoint.
+    const fields: Array<{ col: string; key: string; value: any }> = [
+      { col: 'external_id', key: 'externalId', value: v.externalId },
+      { col: 'first_name', key: 'firstName', value: v.firstName },
+      { col: 'middle_name', key: 'middleName', value: v.middleName },
+      { col: 'last_name', key: 'lastName', value: v.lastName },
+      { col: 'suffix', key: 'suffix', value: v.suffix },
+      { col: 'age', key: 'age', value: v.age },
+      { col: 'gender', key: 'gender', value: v.gender },
+      { col: 'race', key: 'race', value: v.race },
+      { col: 'party', key: 'party', value: v.party },
+      { col: 'phone', key: 'phone', value: v.phone },
+      { col: 'address', key: 'address', value: v.address },
+      { col: 'unit', key: 'unit', value: v.unit },
+      { col: 'city', key: 'city', value: v.city },
+      { col: 'state', key: 'state', value: v.state },
+      { col: 'zip', key: 'zip', value: v.zip },
+      { col: 'geom_lat', key: 'geom.lat', value: v.geom?.lat },
+      { col: 'geom_lng', key: 'geom.lng', value: v.geom?.lng },
+    ];
+
+    const setParts: string[] = [];
+    const params: any[] = [];
+    const changes: any = {};
+
+    for (const f of fields) {
+      if (typeof f.value === 'undefined') continue;
+
+      // Only allow setting externalId for manual leads (or keep as-is for imported voters)
+      if (f.col === 'external_id' && existing.rows[0].source !== 'manual') {
+        continue;
+      }
+
+      params.push(f.value === '' ? null : f.value);
+      setParts.push(`${f.col} = $${params.length}`);
+      changes[f.key] = f.value;
+    }
+
+    if (setParts.length === 0) return res.json({ ok: true });
+
+    params.push(req.context.orgId);
+    params.push(id);
+
+    await pool.query(
+      `UPDATE voters SET ${setParts.join(', ')}, updated_at = NOW() WHERE org_id = $${params.length - 1} AND id = $${params.length}`,
+      params
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+       VALUES ('voter.update', $1, $2, $3)`,
+      [req.context.userId, req.context.orgId, { voter_id: id, changes }]
+    );
+
+    const updated = await pool.query("SELECT * FROM voters WHERE id = $1 AND org_id = $2", [id, req.context.orgId]);
+    return res.json(mapVoter(updated.rows[0]));
+  });
+
   app.post("/api/v1/voters", async (req: any, res) => {
     const v = req.body || {};
     const id = crypto.randomUUID();
