@@ -192,7 +192,7 @@ export const processImportJob = async (
                     $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                     $17, $18, NOW()
                 )
-                ON CONFLICT (org_id, external_id) DO UPDATE SET
+                ON CONFLICT (org_id, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
                     first_name = EXCLUDED.first_name,
                     middle_name = EXCLUDED.middle_name,
                     last_name = EXCLUDED.last_name,

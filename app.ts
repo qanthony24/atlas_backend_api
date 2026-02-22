@@ -48,7 +48,9 @@ const mapOrg = (row: any) => ({
 const mapVoter = (row: any) => ({
   id: row.id,
   orgId: row.org_id,
-  externalId: row.external_id,
+  externalId: row.external_id || undefined,
+  source: row.source || 'import',
+  mergedIntoVoterId: row.merged_into_voter_id || undefined,
   firstName: row.first_name,
   middleName: row.middle_name || undefined,
   lastName: row.last_name,
@@ -397,15 +399,19 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     const v = req.body || {};
     const id = crypto.randomUUID();
 
+    // Manual adds are treated as "leads" (not necessarily on the imported voter file)
+    const source = 'manual';
+
     await pool.query(
       `
-      INSERT INTO voters (id, org_id, external_id, first_name, middle_name, last_name, suffix, age, gender, race, party, phone, address, unit, city, state, zip, geom_lat, geom_lng)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      INSERT INTO voters (id, org_id, external_id, source, first_name, middle_name, last_name, suffix, age, gender, race, party, phone, address, unit, city, state, zip, geom_lat, geom_lng)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       `,
       [
         id,
         req.context.orgId,
         v.externalId || null,
+        source,
         v.firstName || "",
         v.middleName || null,
         v.lastName || "",

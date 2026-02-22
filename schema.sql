@@ -37,7 +37,12 @@ CREATE TABLE IF NOT EXISTS memberships (
 CREATE TABLE IF NOT EXISTS voters (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
-    external_id TEXT NOT NULL,
+    -- For imported/registered voters: registration number (stable upsert key).
+    -- For manual leads: may be NULL.
+    external_id TEXT,
+    source TEXT NOT NULL DEFAULT 'import' CHECK (source IN ('import', 'manual')),
+    -- If a lead is merged into an imported voter, we store the target here (manual review only).
+    merged_into_voter_id UUID,
     first_name TEXT NOT NULL,
     middle_name TEXT,
     last_name TEXT NOT NULL,
@@ -55,8 +60,7 @@ CREATE TABLE IF NOT EXISTS voters (
     geom_lat DOUBLE PRECISION,
     geom_lng DOUBLE PRECISION,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(org_id, external_id)
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS walk_lists (
@@ -145,6 +149,29 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
 CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);
 CREATE INDEX IF NOT EXISTS idx_voters_external_id ON voters(external_id);
+CREATE INDEX IF NOT EXISTS idx_voters_org_source ON voters(org_id, source);
+CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_into_voter_id);
+
+-- Back-compat migrations (schema.sql is run at startup)
+ALTER TABLE voters ALTER COLUMN external_id DROP NOT NULL;
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'import';
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS merged_into_voter_id UUID;
+
+-- Replace unconditional unique(org_id, external_id) with partial uniqueness.
+-- (Allows manual leads with NULL external_id while preserving stable upsert for imported voters.)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'voters_org_id_external_id_key'
+  ) THEN
+    ALTER TABLE voters DROP CONSTRAINT voters_org_id_external_id_key;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_voters_org_external_id_not_null
+  ON voters(org_id, external_id)
+  WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_lists_org_id ON walk_lists(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_org_id ON assignments(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_canvasser ON assignments(canvasser_id);
