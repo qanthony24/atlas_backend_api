@@ -9,6 +9,7 @@ import IORedis from "ioredis";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
+import OpenApiValidator from 'express-openapi-validator';
 
 import { authMiddleware, requireAdmin, requireInternal } from "./middleware/auth";
 import { config } from "./config";
@@ -264,6 +265,28 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
 </html>`;
     res.status(200).type('text/html').send(html);
   });
+
+  // -------------------------
+  // OpenAPI validation (Phase 2 requirement)
+  // -------------------------
+  // Validates request bodies/params against openapi.yaml.
+  // Internal endpoints are intentionally excluded.
+  try {
+    const { yamlPath } = loadOpenApiSpec();
+    app.use(
+      OpenApiValidator.middleware({
+        apiSpec: yamlPath,
+        validateRequests: true,
+        // Response validation is useful but can be noisy until specs are fully complete.
+        // Keep it on by default in non-production; allow explicit opt-in in prod.
+        validateResponses: config.nodeEnv !== 'production' || process.env.OPENAPI_VALIDATE_RESPONSES === 'true',
+        ignorePaths: /^(\/api\/v1\/internal\/|\/internal\/|\/health$|\/ready$|\/openapi\.(yaml|json)$|\/docs$|\/__version$)/,
+      })
+    );
+    console.log('[openapi.validator]', { enabled: true, yamlPath });
+  } catch (err: any) {
+    console.error('[openapi.validator]', { enabled: false, error: err?.message || String(err) });
+  }
 
   // -------------------------
   // Auth (public)
@@ -1477,9 +1500,23 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     });
   });
 
+  // -------------------------
+  // OpenAPI validation error handler
+  // -------------------------
+  // Must be registered after routes.
+  app.use((err: any, _req: any, res: any, next: any) => {
+    if (err && (err.status || err.statusCode) && err.errors) {
+      const status = err.status || err.statusCode || 400;
+      return res.status(status).json({
+        error: 'Request validation failed',
+        details: err.message,
+        errors: err.errors,
+      });
+    }
+    return next(err);
+  });
+
   return app;
 };
-
-
 
 

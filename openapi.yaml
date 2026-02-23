@@ -110,6 +110,22 @@ components:
         survey_responses: { type: object }
       required: [id, org_id, user_id, voter_id, occurred_at, channel, result_code, client_interaction_uuid]
 
+    InteractionCreate:
+      type: object
+      properties:
+        org_id: { type: string, format: uuid, description: "Ignored; org is derived from auth token." }
+        voter_id: { type: string, format: uuid }
+        assignment_id: { type: string, format: uuid, nullable: true }
+        occurred_at: { type: string, format: date-time }
+        channel: { type: string, enum: [canvass] }
+        result_code:
+          type: string
+          enum: [contacted, not_home, refused, moved, inaccessible, deceased]
+        notes: { type: string }
+        client_interaction_uuid: { type: string, description: "Client-generated idempotency key" }
+        survey_responses: { type: object }
+      required: [voter_id, occurred_at, channel, result_code, client_interaction_uuid]
+
     Job:
       type: object
       properties:
@@ -219,6 +235,23 @@ paths:
               type: object
               properties:
                 role: { $ref: '#/components/schemas/UserRole' }
+              required: [role]
+      responses:
+        '200':
+          description: Updated auth token with new role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+                  org: { $ref: '#/components/schemas/Organization' }
+                required: [token, user, org]
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
 
   /me:
     get:
@@ -429,7 +462,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Interaction'
+              $ref: '#/components/schemas/InteractionCreate'
       responses:
         '201':
           description: Created
@@ -448,7 +481,7 @@ paths:
             schema:
               type: array
               items:
-                $ref: '#/components/schemas/Interaction'
+                $ref: '#/components/schemas/InteractionCreate'
       responses:
         '200':
           description: Bulk result
