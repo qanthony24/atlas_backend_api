@@ -1375,6 +1375,38 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     });
   });
 
+  // Audit log inspection (bounded). Verifies sensitive actions are being recorded.
+  app.get('/api/v1/internal/audit/recent', requireInternal, async (req: any, res) => {
+    const limitRaw = String(req.query?.limit || '50');
+    const limit = Math.max(1, Math.min(200, Number(limitRaw) || 50));
+
+    const rows = await pool.query(
+      `
+      SELECT id, action, actor_user_id, target_org_id, occurred_at,
+             CASE
+               WHEN metadata IS NULL THEN NULL
+               ELSE left(metadata::text, 2000)::text
+             END AS metadata_text
+        FROM audit_logs
+       ORDER BY occurred_at DESC
+       LIMIT $1
+      `,
+      [limit]
+    );
+
+    res.json({
+      limit,
+      audit: rows.rows.map((r: any) => ({
+        id: r.id,
+        action: r.action,
+        actor_user_id: r.actor_user_id,
+        target_org_id: r.target_org_id,
+        occurred_at: r.occurred_at,
+        metadata_text: r.metadata_text || undefined,
+      })),
+    });
+  });
+
   return app;
 };
 
