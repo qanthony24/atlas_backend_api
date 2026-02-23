@@ -433,8 +433,12 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     return res.status(200).json({ token, user: mapUser(userRow), org: mapOrg(org.rows[0]) });
   });
 
-  // Everything below here requires auth
-  app.use("/api/v1", authMiddleware);
+  // Everything below here requires auth, EXCEPT staff-only /api/v1/internal/* routes.
+  // Internal routes are protected by requireInternal (INTERNAL_ADMIN_TOKEN) and must remain reachable even when user auth (OTP/email) is unavailable.
+  app.use("/api/v1", (req: any, res: any, next: any) => {
+    if (String(req.path || '').startsWith('/internal/')) return next();
+    return authMiddleware(req, res, next);
+  });
 
   // -------------------------
   // Session endpoints
