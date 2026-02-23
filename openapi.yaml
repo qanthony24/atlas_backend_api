@@ -4,7 +4,7 @@ info:
   description: Backend API for the VoterField Canvassing Platform.
   version: 1.0.0
 servers:
-  - url: /api/v1
+  - url: /
     description: Production API
 
 components:
@@ -158,7 +158,7 @@ security:
   - BearerAuth: []
 
 paths:
-  /auth/login:
+  /api/v1/auth/login:
     post:
       summary: Authenticate user (password)
       security: []
@@ -176,7 +176,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/LoginResponse'
 
-  /auth/otp/request:
+  /api/v1/auth/otp/request:
     post:
       summary: Request OTP + magic link (always returns ok)
       security: []
@@ -200,7 +200,7 @@ paths:
                   ok: { type: boolean }
                 required: [ok]
 
-  /auth/otp/verify:
+  /api/v1/auth/otp/verify:
     post:
       summary: Verify OTP code or magic-link token
       security: []
@@ -224,7 +224,7 @@ paths:
         '401':
           description: Invalid or expired code/token
 
-  /auth/switch-role:
+  /api/v1/auth/switch-role:
     post:
       summary: Switch current role (dev utility)
       requestBody:
@@ -253,7 +253,7 @@ paths:
         '401':
           description: Unauthorized
 
-  /me:
+  /api/v1/me:
     get:
       summary: Get current user + org context
       responses:
@@ -268,7 +268,7 @@ paths:
                   org: { $ref: '#/components/schemas/Organization' }
                 required: [user, org]
 
-  /org:
+  /api/v1/org:
     get:
       summary: Get current organization context
       responses:
@@ -279,7 +279,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Organization'
 
-  /voters:
+  /api/v1/voters:
     get:
       summary: Get voters (paginated)
       parameters:
@@ -344,7 +344,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Voter'
 
-  /voters/{id}:
+  /api/v1/voters/{id}:
     get:
       summary: Get voter by id
       parameters:
@@ -376,7 +376,7 @@ paths:
         '200':
           description: Updated
 
-  /lists:
+  /api/v1/lists:
     get:
       summary: Get walk lists
       responses:
@@ -409,7 +409,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WalkList'
 
-  /assignments:
+  /api/v1/assignments:
     get:
       summary: Get assignments (scope=me|org)
       parameters:
@@ -444,7 +444,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Assignment'
 
-  /interactions:
+  /api/v1/interactions:
     get:
       summary: Get interactions
       responses:
@@ -471,7 +471,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Interaction'
 
-  /interactions/bulk:
+  /api/v1/interactions/bulk:
     post:
       summary: Bulk log interactions (idempotent)
       requestBody:
@@ -486,7 +486,7 @@ paths:
         '200':
           description: Bulk result
 
-  /users:
+  /api/v1/users:
     get:
       summary: Get users
       parameters:
@@ -502,7 +502,7 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/User' }
 
-  /users/invite:
+  /api/v1/users/invite:
     post:
       summary: Invite new user
       requestBody:
@@ -524,7 +524,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/User'
 
-  /jobs/import-voters:
+  /api/v1/jobs/import-voters:
     post:
       summary: Start async voter import (JSON payload)
       requestBody:
@@ -547,7 +547,7 @@ paths:
                   status: { type: string }
                 required: [id, status]
 
-  /imports/voters:
+  /api/v1/imports/voters:
     post:
       summary: Upload CSV and start import
       requestBody:
@@ -568,7 +568,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Job'
 
-  /jobs/{id}:
+  /api/v1/jobs/{id}:
     get:
       summary: Get job status
       parameters:
@@ -584,14 +584,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Job'
 
-  /metrics/field/summary:
+  /api/v1/metrics/field/summary:
     get:
       summary: Field metrics summary
       responses:
         '200':
           description: Summary stats
 
-  /internal/organizations:
+  /api/v1/internal/organizations:
     get:
       summary: List all organizations (Staff Only)
       responses:
@@ -604,7 +604,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/Organization'
 
-  /internal/organizations/{id}/health:
+  /api/v1/internal/organizations/{id}/health:
     get:
       summary: Organization health (Staff Only)
       parameters:
