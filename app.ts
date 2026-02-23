@@ -908,9 +908,14 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       }
 
       await client.query('COMMIT');
-    } catch (err) {
+    } catch (err: any) {
       await client.query('ROLLBACK');
-      throw err;
+      // Do not throw from async route handlers in Express v4; it can lead to hung requests / 502s.
+      // Return a bounded error instead.
+      return res.status(400).json({
+        error: 'Failed to create interaction',
+        details: err?.message || String(err),
+      });
     } finally {
       client.release();
     }
@@ -1022,9 +1027,12 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
         duplicate_count,
         inserted_client_uuids: insertedRows.rows.map((r: any) => r.client_interaction_uuid),
       });
-    } catch (err) {
+    } catch (err: any) {
       await client.query('ROLLBACK');
-      throw err;
+      return res.status(400).json({
+        error: 'Failed to bulk create interactions',
+        details: err?.message || String(err),
+      });
     } finally {
       client.release();
     }
