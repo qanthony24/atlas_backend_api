@@ -1302,6 +1302,51 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     }
   });
 
+  // Minimal job peek: prove that workers are consuming jobs by showing recent job ids + states.
+  // Payload is intentionally small (no job data).
+  app.get("/api/v1/internal/queues/import_voters/recent", requireInternal, async (req: any, res) => {
+    try {
+      const limitRaw = String(req.query?.limit || '20');
+      const limit = Math.max(1, Math.min(50, Number(limitRaw) || 20));
+
+      const connection = createQueueConnection();
+      const q = new Queue('import_voters', { connection });
+
+      const [waiting, active, failed, completed] = await Promise.all([
+        q.getJobs(['waiting'], 0, limit - 1),
+        q.getJobs(['active'], 0, limit - 1),
+        q.getJobs(['failed'], 0, limit - 1),
+        q.getJobs(['completed'], 0, limit - 1),
+      ]);
+
+      const map = (jobs: any[]) =>
+        jobs.map((j: any) => ({
+          id: j.id,
+          name: j.name,
+          timestamp: j.timestamp,
+          processedOn: j.processedOn,
+          finishedOn: j.finishedOn,
+          failedReason: j.failedReason || undefined,
+        }));
+
+      await q.close();
+      connection.disconnect();
+
+      return res.json({
+        queue: 'import_voters',
+        limit,
+        recent: {
+          waiting: map(waiting),
+          active: map(active),
+          failed: map(failed),
+          completed: map(completed),
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to inspect queue jobs', details: err?.message || String(err) });
+    }
+  });
+
   app.get("/api/v1/internal/organizations", requireInternal, async (_req: any, res) => {
     const orgs = await pool.query("SELECT * FROM organizations ORDER BY created_at DESC LIMIT 200");
     res.json(orgs.rows.map(mapOrg));
