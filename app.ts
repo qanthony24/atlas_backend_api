@@ -1288,6 +1288,58 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Internal (platform admin)
   // -------------------------
+
+  // Staff-only: mint a normal auth token for an existing user (or create a user) without OTP.
+  // This exists to unblock Phase 2 E2E workflow validation when SES is unavailable.
+  app.post('/api/v1/internal/auth/impersonate', requireInternal, async (req: any, res) => {
+    const { email, role, org_id, name } = req.body || {};
+
+    if (!email || String(email).trim() === '') return res.status(400).json({ error: 'email required' });
+    const desiredRole = role === 'admin' || role === 'canvasser' ? role : 'canvasser';
+
+    // Find user by email (global uniqueness is not enforced; prefer explicit org when creating).
+    let userRow: any | null = null;
+
+    if (org_id) {
+      const u = await pool.query('SELECT * FROM users WHERE org_id = $1 AND email = $2 LIMIT 1', [org_id, email]);
+      userRow = u.rows[0] || null;
+    } else {
+      const u = await pool.query('SELECT * FROM users WHERE email = $1 ORDER BY created_at DESC LIMIT 1', [email]);
+      userRow = u.rows[0] || null;
+    }
+
+    // If missing, create a user (requires org_id).
+    if (!userRow) {
+      if (!org_id) return res.status(400).json({ error: 'org_id required to create user' });
+
+      const org = await pool.query('SELECT * FROM organizations WHERE id = $1', [org_id]);
+      if (!org.rows[0]) return res.status(404).json({ error: 'organization not found' });
+
+      const created = await pool.query(
+        `INSERT INTO users (org_id, name, email, role, password_hash)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [org_id, name || email, email, desiredRole, 'internal_impersonate']
+      );
+      userRow = created.rows[0];
+    }
+
+    // If org_id provided and doesn't match existing user, refuse (avoid cross-tenant footguns).
+    if (org_id && userRow.org_id !== org_id) {
+      return res.status(409).json({ error: 'email exists under a different org_id; specify correct org_id or use a different email' });
+    }
+
+    // Ensure role matches desired.
+    if (userRow.role !== desiredRole) {
+      const upd = await pool.query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *', [desiredRole, userRow.id]);
+      userRow = upd.rows[0];
+    }
+
+    const org = await pool.query('SELECT * FROM organizations WHERE id = $1', [userRow.org_id]);
+    const token = jwt.sign({ sub: userRow.id, org_id: userRow.org_id, role: userRow.role }, config.jwtSecret, { expiresIn: '12h' });
+
+    return res.status(200).json({ token, user: mapUser(userRow), org: mapOrg(org.rows[0]) });
+  });
   app.get("/api/v1/internal/queues/import_voters/counts", requireInternal, async (_req: any, res) => {
     try {
       // BullMQ stores queue metadata in Redis. This endpoint proves whether jobs are landing in Redis.
