@@ -25,6 +25,49 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE(org_id, email)
 );
 
+-- -------------------------
+-- Phase 3: Campaign onboarding scaffolding
+-- -------------------------
+
+CREATE TABLE IF NOT EXISTS campaign_profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    office_type TEXT,
+    district_type TEXT,
+    election_date DATE,
+    win_number_target INTEGER,
+    expected_turnout INTEGER,
+    geography_unit_type TEXT,
+    campaign_phase TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id)
+);
+
+CREATE TABLE IF NOT EXISTS campaign_goals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    goal_type TEXT NOT NULL CHECK (goal_type IN ('doors', 'contacts', 'ids', 'turnout')),
+    target_value INTEGER NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS geography_units (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    unit_type TEXT NOT NULL,
+    external_id TEXT,
+    name TEXT NOT NULL,
+    past_turnout INTEGER,
+    past_dem_result DOUBLE PRECISION,
+    geometry_json JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, unit_type, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS memberships (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
@@ -193,6 +236,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_voters_org_external_id_not_null
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_profiles_org_id ON campaign_profiles(org_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_goals_org_id ON campaign_goals(org_id);
+CREATE INDEX IF NOT EXISTS idx_geography_units_org_id ON geography_units(org_id);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
 CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);

@@ -478,6 +478,146 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   });
 
   // -------------------------
+  // Phase 3: Campaign Setup (Onboarding)
+  // Admin-only: establishes campaign profile + goals + geography scaffolding.
+  // -------------------------
+
+  app.get('/api/v1/campaign/profile', requireAdmin, async (req: any, res) => {
+    const row = await pool.query('SELECT * FROM campaign_profiles WHERE org_id = $1', [req.context.orgId]);
+    res.json(row.rows[0] || null);
+  });
+
+  app.put('/api/v1/campaign/profile', requireAdmin, async (req: any, res) => {
+    const b = req.body || {};
+
+    const office_type = b.office_type ?? null;
+    const district_type = b.district_type ?? null;
+    const election_date = b.election_date ?? null;
+    const win_number_target = b.win_number_target ?? null;
+    const expected_turnout = b.expected_turnout ?? null;
+    const geography_unit_type = b.geography_unit_type ?? null;
+    const campaign_phase = b.campaign_phase ?? null;
+
+    const up = await pool.query(
+      `
+      INSERT INTO campaign_profiles (
+        org_id, office_type, district_type, election_date, win_number_target, expected_turnout, geography_unit_type, campaign_phase
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (org_id) DO UPDATE SET
+        office_type = EXCLUDED.office_type,
+        district_type = EXCLUDED.district_type,
+        election_date = EXCLUDED.election_date,
+        win_number_target = EXCLUDED.win_number_target,
+        expected_turnout = EXCLUDED.expected_turnout,
+        geography_unit_type = EXCLUDED.geography_unit_type,
+        campaign_phase = EXCLUDED.campaign_phase,
+        updated_at = NOW()
+      RETURNING *
+      `,
+      [
+        req.context.orgId,
+        office_type,
+        district_type,
+        election_date,
+        win_number_target,
+        expected_turnout,
+        geography_unit_type,
+        campaign_phase,
+      ]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+       VALUES ('campaign_profile.upsert', $1, $2, $3)`,
+      [req.context.userId, req.context.orgId, { office_type, district_type, election_date, win_number_target, expected_turnout, geography_unit_type, campaign_phase }]
+    );
+
+    res.json(up.rows[0]);
+  });
+
+  app.get('/api/v1/campaign/goals', requireAdmin, async (req: any, res) => {
+    const rows = await pool.query(
+      'SELECT * FROM campaign_goals WHERE org_id = $1 ORDER BY created_at DESC',
+      [req.context.orgId]
+    );
+    res.json({ goals: rows.rows });
+  });
+
+  app.post('/api/v1/campaign/goals', requireAdmin, async (req: any, res) => {
+    const b = req.body || {};
+    const goal_type = String(b.goal_type || '').trim();
+    const target_value = Number(b.target_value);
+    const start_date = b.start_date;
+    const end_date = b.end_date;
+
+    if (!goal_type || !Number.isFinite(target_value) || !start_date || !end_date) {
+      return res.status(400).json({ error: 'Missing required fields: goal_type, target_value, start_date, end_date' });
+    }
+
+    const ins = await pool.query(
+      `
+      INSERT INTO campaign_goals (org_id, goal_type, target_value, start_date, end_date)
+      VALUES ($1,$2,$3,$4,$5)
+      RETURNING *
+      `,
+      [req.context.orgId, goal_type, target_value, start_date, end_date]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+       VALUES ('campaign_goal.create', $1, $2, $3)`,
+      [req.context.userId, req.context.orgId, ins.rows[0]]
+    );
+
+    res.status(201).json(ins.rows[0]);
+  });
+
+  app.get('/api/v1/geography/units', requireAdmin, async (req: any, res) => {
+    const rows = await pool.query(
+      'SELECT * FROM geography_units WHERE org_id = $1 ORDER BY name ASC',
+      [req.context.orgId]
+    );
+    res.json({ units: rows.rows });
+  });
+
+  app.post('/api/v1/geography/units', requireAdmin, async (req: any, res) => {
+    const b = req.body || {};
+    const unit_type = String(b.unit_type || '').trim();
+    const external_id = b.external_id ?? null;
+    const name = String(b.name || '').trim();
+    const past_turnout = b.past_turnout ?? null;
+    const past_dem_result = b.past_dem_result ?? null;
+    const geometry_json = b.geometry_json ?? null;
+
+    if (!unit_type || !name) {
+      return res.status(400).json({ error: 'Missing required fields: unit_type, name' });
+    }
+
+    const ins = await pool.query(
+      `
+      INSERT INTO geography_units (org_id, unit_type, external_id, name, past_turnout, past_dem_result, geometry_json)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (org_id, unit_type, external_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        past_turnout = EXCLUDED.past_turnout,
+        past_dem_result = EXCLUDED.past_dem_result,
+        geometry_json = EXCLUDED.geometry_json,
+        updated_at = NOW()
+      RETURNING *
+      `,
+      [req.context.orgId, unit_type, external_id, name, past_turnout, past_dem_result, geometry_json]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+       VALUES ('geography_unit.upsert', $1, $2, $3)`,
+      [req.context.userId, req.context.orgId, ins.rows[0]]
+    );
+
+    res.status(201).json(ins.rows[0]);
+  });
+
+  // -------------------------
   // Voters
   // -------------------------
   app.get("/api/v1/voters", async (req: any, res) => {
