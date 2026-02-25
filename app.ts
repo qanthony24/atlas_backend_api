@@ -896,7 +896,7 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
       await client.query('BEGIN');
 
       await client.query(
-        "INSERT INTO walk_lists (id, org_id, name, created_by_user_id) VALUES ($1,$2,$3,$4)",
+        "INSERT INTO walk_lists (id, org_id, name, created_by_user_id, type) VALUES ($1,$2,$3,$4,'static')",
         [listId, req.context.orgId, name, req.context.userId]
       );
 
@@ -931,6 +931,162 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
     );
 
     res.status(201).json(mapList(created.rows[0]));
+  });
+
+  // -------------------------
+  // Phase 3 Milestone 3: Turf Engine v1
+  // Turf is a structured list stored in walk_lists + list_members.
+  // -------------------------
+
+  app.post('/api/v1/turfs/filter', requireAdmin, async (req: any, res) => {
+    const b = req.body || {};
+    const name = String(b.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    const party = b.party && String(b.party).trim() !== 'All' ? String(b.party).trim() : null;
+    const city = b.city && String(b.city).trim() !== 'All' ? String(b.city).trim() : null;
+
+    const centerLat = b.center?.lat ?? null;
+    const centerLng = b.center?.lng ?? null;
+    const radiusKm = b.radius_km ?? null;
+
+    const useRadius = Number.isFinite(Number(centerLat)) && Number.isFinite(Number(centerLng)) && Number.isFinite(Number(radiusKm));
+
+    // Build voter selector
+    const params: any[] = [req.context.orgId];
+    const where: string[] = ['org_id = $1'];
+
+    if (party) {
+      params.push(party);
+      where.push(`party = $${params.length}`);
+    }
+
+    if (city) {
+      params.push(city);
+      where.push(`city = $${params.length}`);
+    }
+
+    if (useRadius) {
+      // Haversine in SQL (km)
+      params.push(Number(centerLat));
+      params.push(Number(centerLng));
+      params.push(Number(radiusKm));
+
+      const latIdx = params.length - 2;
+      const lngIdx = params.length - 1;
+      const rIdx = params.length;
+
+      where.push(
+        `geom_lat IS NOT NULL AND geom_lng IS NOT NULL AND (
+          6371 * acos(
+            cos(radians($${latIdx})) * cos(radians(geom_lat)) * cos(radians(geom_lng) - radians($${lngIdx})) +
+            sin(radians($${latIdx})) * sin(radians(geom_lat))
+          )
+        ) <= $${rIdx}`
+      );
+    }
+
+    const voterRows = await pool.query(
+      `SELECT id FROM voters WHERE ${where.join(' AND ')} ORDER BY last_name, first_name LIMIT 50000`,
+      params
+    );
+
+    const listId = crypto.randomUUID();
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `
+        INSERT INTO walk_lists (id, org_id, name, created_by_user_id, type, turf_strategy)
+        VALUES ($1,$2,$3,$4,'turf','filter')
+        `,
+        [listId, req.context.orgId, name, req.context.userId]
+      );
+
+      for (const r of voterRows.rows) {
+        await client.query(
+          "INSERT INTO list_members (org_id, list_id, voter_id) VALUES ($1,$2,$3) ON CONFLICT (org_id, list_id, voter_id) DO NOTHING",
+          [req.context.orgId, listId, r.id]
+        );
+      }
+
+      const voterCount = voterRows.rows.length;
+      const contacted = await client.query(
+        `
+        SELECT COUNT(DISTINCT i.voter_id)::int AS contacted
+          FROM interactions i
+          JOIN list_members lm
+            ON lm.org_id = i.org_id
+           AND lm.voter_id = i.voter_id
+           AND lm.list_id = $2
+         WHERE i.org_id = $1
+           AND i.result_code = 'contacted'
+        `,
+        [req.context.orgId, listId]
+      );
+
+      const contactedVoters = Number(contacted.rows[0]?.contacted || 0);
+      const completion = voterCount > 0 ? (contactedVoters / voterCount) : 0;
+
+      await client.query(
+        `
+        INSERT INTO turf_metadata (org_id, list_id, voter_count, unit_ids, completion_percentage)
+        VALUES ($1,$2,$3,'[]'::jsonb,$4)
+        ON CONFLICT (org_id, list_id) DO UPDATE SET
+          voter_count = EXCLUDED.voter_count,
+          completion_percentage = EXCLUDED.completion_percentage,
+          updated_at = NOW()
+        `,
+        [req.context.orgId, listId, voterCount, completion]
+      );
+
+      await client.query(
+        `INSERT INTO audit_logs (action, actor_user_id, target_org_id, metadata)
+         VALUES ('turf.create', $1, $2, $3)`,
+        [req.context.userId, req.context.orgId, { list_id: listId, turf_strategy: 'filter', party, city, useRadius, radius_km: radiusKm }]
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const created = await pool.query(
+      `
+      SELECT
+        wl.*,
+        COALESCE(array_agg(lm.voter_id) FILTER (WHERE lm.voter_id IS NOT NULL), '{}') AS voter_ids
+      FROM walk_lists wl
+      LEFT JOIN list_members lm
+        ON lm.org_id = wl.org_id
+       AND lm.list_id = wl.id
+      WHERE wl.id = $1 AND wl.org_id = $2
+      GROUP BY wl.id
+      `,
+      [listId, req.context.orgId]
+    );
+
+    const meta = await pool.query(
+      `SELECT voter_count, unit_ids, completion_percentage, updated_at FROM turf_metadata WHERE org_id = $1 AND list_id = $2`,
+      [req.context.orgId, listId]
+    );
+
+    res.status(201).json({ list: mapList(created.rows[0]), metadata: meta.rows[0] || null });
+  });
+
+  app.get('/api/v1/turfs/:id/metadata', requireAdmin, async (req: any, res) => {
+    const listId = req.params.id;
+    const meta = await pool.query(
+      `SELECT voter_count, unit_ids, completion_percentage, updated_at FROM turf_metadata WHERE org_id = $1 AND list_id = $2`,
+      [req.context.orgId, listId]
+    );
+    if (!meta.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(meta.rows[0]);
   });
 
   app.get("/api/v1/assignments", async (req: any, res) => {

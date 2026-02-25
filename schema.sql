@@ -128,6 +128,24 @@ CREATE TABLE IF NOT EXISTS walk_lists (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Phase 3: Turf Engine v1 (Milestone 3)
+ALTER TABLE walk_lists ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'static' CHECK (type IN ('static', 'turf'));
+ALTER TABLE walk_lists ADD COLUMN IF NOT EXISTS turf_strategy TEXT CHECK (turf_strategy IN ('precinct', 'grid', 'radius', 'filter'));
+ALTER TABLE walk_lists ADD COLUMN IF NOT EXISTS geography_unit_id UUID;
+ALTER TABLE walk_lists ADD COLUMN IF NOT EXISTS target_contact_goal INTEGER;
+
+CREATE TABLE IF NOT EXISTS turf_metadata (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    list_id UUID NOT NULL REFERENCES walk_lists(id) ON DELETE CASCADE,
+    voter_count INTEGER NOT NULL DEFAULT 0,
+    unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    completion_percentage DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, list_id)
+);
+
 CREATE TABLE IF NOT EXISTS list_members (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
@@ -302,6 +320,8 @@ CREATE INDEX IF NOT EXISTS idx_voters_org_merged_into ON voters(org_id, merged_i
 CREATE INDEX IF NOT EXISTS idx_merge_alerts_org_status ON voter_merge_alerts(org_id, status);
 CREATE INDEX IF NOT EXISTS idx_merge_alerts_org_created_at ON voter_merge_alerts(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lists_org_id ON walk_lists(org_id);
+CREATE INDEX IF NOT EXISTS idx_lists_org_type ON walk_lists(org_id, type);
+CREATE INDEX IF NOT EXISTS idx_turf_metadata_org_id ON turf_metadata(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_org_id ON assignments(org_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_canvasser ON assignments(canvasser_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_org_id ON interactions(org_id);
