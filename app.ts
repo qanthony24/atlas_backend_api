@@ -1515,12 +1515,254 @@ export const createApp = ({ pool, importQueue, s3Client }: AppDependencies) => {
   // -------------------------
   // Metrics
   // -------------------------
+
+  // Phase 2 legacy: small health summary
   app.get("/api/v1/metrics/field/summary", requireAdmin, async (req: any, res) => {
     const voters = await pool.query("SELECT COUNT(*)::int AS count FROM voters WHERE org_id = $1", [req.context.orgId]);
     const interactions = await pool.query("SELECT COUNT(*)::int AS count FROM interactions WHERE org_id = $1", [
       req.context.orgId,
     ]);
     res.json({ voter_count: voters.rows[0].count, interaction_count: interactions.rows[0].count });
+  });
+
+  // -------------------------
+  // Phase 3 Milestone 2: Goal Engine + Aggregates
+  // -------------------------
+
+  const recomputeAggregates = async (orgId: string) => {
+    // Voter contact summary: doors, contacts, ids
+    // - Doors knocked: total interactions
+    // - Contacts: result_code = contacted
+    // - IDs: contacted AND survey_responses.support_level present
+    const vcs = await pool.query(
+      `
+      WITH ints AS (
+        SELECT i.id, i.occurred_at, i.result_code
+          FROM interactions i
+         WHERE i.org_id = $1
+      ), ids AS (
+        SELECT COUNT(DISTINCT i.voter_id)::int AS ids
+          FROM interactions i
+          JOIN survey_responses sr ON sr.interaction_id = i.id AND sr.org_id = i.org_id
+         WHERE i.org_id = $1
+           AND i.result_code = 'contacted'
+           AND (sr.responses ? 'support_level')
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM ints) AS doors_knocked,
+        (SELECT COUNT(*)::int FROM ints WHERE result_code = 'contacted') AS contacts,
+        (SELECT ids FROM ids) AS ids,
+        (SELECT MAX(occurred_at) FROM ints) AS last_occurred_at
+      `,
+      [orgId]
+    );
+
+    const row = vcs.rows[0] || { doors_knocked: 0, contacts: 0, ids: 0, last_occurred_at: null };
+
+    await pool.query(
+      `
+      INSERT INTO voter_contact_summary (org_id, doors_knocked, contacts, ids, last_occurred_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,NOW())
+      ON CONFLICT (org_id) DO UPDATE SET
+        doors_knocked = EXCLUDED.doors_knocked,
+        contacts = EXCLUDED.contacts,
+        ids = EXCLUDED.ids,
+        last_occurred_at = EXCLUDED.last_occurred_at,
+        updated_at = NOW()
+      `,
+      [orgId, row.doors_knocked || 0, row.contacts || 0, row.ids || 0, row.last_occurred_at]
+    );
+
+    // Assignment progress: completion = distinct contacted voters / total voters in list
+    const ap = await pool.query(
+      `
+      WITH lm AS (
+        SELECT a.id AS assignment_id, a.list_id, a.canvasser_id,
+               COUNT(DISTINCT m.voter_id)::int AS total_voters
+          FROM assignments a
+          JOIN list_members m ON m.list_id = a.list_id AND m.org_id = a.org_id
+         WHERE a.org_id = $1
+         GROUP BY a.id, a.list_id, a.canvasser_id
+      ), cv AS (
+        SELECT a.id AS assignment_id,
+               COUNT(DISTINCT i.voter_id)::int AS contacted_voters,
+               MAX(i.occurred_at) AS last_activity_at
+          FROM assignments a
+          LEFT JOIN interactions i
+            ON i.assignment_id = a.id
+           AND i.org_id = a.org_id
+           AND i.result_code = 'contacted'
+         WHERE a.org_id = $1
+         GROUP BY a.id
+      )
+      SELECT lm.assignment_id, lm.list_id, lm.canvasser_id,
+             lm.total_voters,
+             COALESCE(cv.contacted_voters, 0)::int AS contacted_voters,
+             CASE WHEN lm.total_voters > 0 THEN (COALESCE(cv.contacted_voters,0)::double precision / lm.total_voters::double precision) ELSE 0 END AS completion_pct,
+             cv.last_activity_at
+        FROM lm
+        LEFT JOIN cv ON cv.assignment_id = lm.assignment_id
+      `,
+      [orgId]
+    );
+
+    for (const r of ap.rows) {
+      await pool.query(
+        `
+        INSERT INTO assignment_progress_summary (org_id, assignment_id, list_id, canvasser_id, total_voters, contacted_voters, completion_pct, last_activity_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ON CONFLICT (org_id, assignment_id) DO UPDATE SET
+          total_voters = EXCLUDED.total_voters,
+          contacted_voters = EXCLUDED.contacted_voters,
+          completion_pct = EXCLUDED.completion_pct,
+          last_activity_at = EXCLUDED.last_activity_at,
+          updated_at = NOW()
+        `,
+        [orgId, r.assignment_id, r.list_id, r.canvasser_id, r.total_voters, r.contacted_voters, r.completion_pct, r.last_activity_at]
+      );
+    }
+
+    // Goal progress summary: current_value derived from voter_contact_summary
+    const goals = await pool.query(
+      `SELECT id, goal_type, target_value, start_date, end_date FROM campaign_goals WHERE org_id = $1`,
+      [orgId]
+    );
+
+    const current = await pool.query(
+      `SELECT doors_knocked, contacts, ids FROM voter_contact_summary WHERE org_id = $1`,
+      [orgId]
+    );
+
+    const cur = current.rows[0] || { doors_knocked: 0, contacts: 0, ids: 0 };
+
+    for (const g of goals.rows) {
+      const gt = String(g.goal_type);
+      const target = Number(g.target_value) || 0;
+      const current_value =
+        gt === 'doors' ? Number(cur.doors_knocked) || 0 :
+        gt === 'contacts' ? Number(cur.contacts) || 0 :
+        gt === 'ids' ? Number(cur.ids) || 0 :
+        0;
+
+      const completion_pct = target > 0 ? (current_value / target) : 0;
+
+      await pool.query(
+        `
+        INSERT INTO goal_progress_summary (org_id, goal_id, goal_type, target_value, current_value, completion_pct, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,NOW())
+        ON CONFLICT (org_id, goal_id) DO UPDATE SET
+          goal_type = EXCLUDED.goal_type,
+          target_value = EXCLUDED.target_value,
+          current_value = EXCLUDED.current_value,
+          completion_pct = EXCLUDED.completion_pct,
+          updated_at = NOW()
+        `,
+        [orgId, g.id, gt, target, current_value, completion_pct]
+      );
+    }
+
+    // Geography progress: placeholder (no voter<->unit mapping yet)
+    // Keep rows updated so the API has a stable surface.
+    const units = await pool.query('SELECT id FROM geography_units WHERE org_id = $1', [orgId]);
+    for (const u of units.rows) {
+      await pool.query(
+        `
+        INSERT INTO geography_progress_summary (org_id, geography_unit_id, contacted_voters, total_voters, completion_pct, updated_at)
+        VALUES ($1,$2,0,NULL,NULL,NOW())
+        ON CONFLICT (org_id, geography_unit_id) DO UPDATE SET
+          updated_at = NOW()
+        `,
+        [orgId, u.id]
+      );
+    }
+  };
+
+  app.get('/api/v1/metrics/campaign/overview', requireAdmin, async (req: any, res) => {
+    await recomputeAggregates(req.context.orgId);
+
+    const profile = await pool.query('SELECT * FROM campaign_profiles WHERE org_id = $1', [req.context.orgId]);
+    const contact = await pool.query('SELECT * FROM voter_contact_summary WHERE org_id = $1', [req.context.orgId]);
+
+    const cp = profile.rows[0] || null;
+    const cs = contact.rows[0] || { doors_knocked: 0, contacts: 0, ids: 0, last_occurred_at: null };
+
+    res.json({
+      profile: cp,
+      progress: {
+        doors: { current: cs.doors_knocked, label: 'Doors knocked' },
+        contacts: { current: cs.contacts, label: 'Contacts' },
+        ids: { current: cs.ids, label: 'IDs (support captured)' },
+        win_number_target: cp?.win_number_target ?? null,
+      },
+      updated_at: cs.updated_at || null,
+    });
+  });
+
+  app.get('/api/v1/metrics/goals', requireAdmin, async (req: any, res) => {
+    await recomputeAggregates(req.context.orgId);
+    const rows = await pool.query(
+      'SELECT * FROM goal_progress_summary WHERE org_id = $1 ORDER BY updated_at DESC',
+      [req.context.orgId]
+    );
+    res.json({ goals: rows.rows });
+  });
+
+  app.get('/api/v1/metrics/velocity', requireAdmin, async (req: any, res) => {
+    // Contacts per day (last 14 days) + IDs per day
+    const rows = await pool.query(
+      `
+      WITH days AS (
+        SELECT (CURRENT_DATE - offs)::date AS day
+          FROM generate_series(0, 13) offs
+      ), contacts AS (
+        SELECT date_trunc('day', occurred_at)::date AS day,
+               COUNT(*)::int AS contacts
+          FROM interactions
+         WHERE org_id = $1
+           AND result_code = 'contacted'
+           AND occurred_at >= (CURRENT_DATE - interval '13 days')
+         GROUP BY 1
+      ), ids AS (
+        SELECT date_trunc('day', i.occurred_at)::date AS day,
+               COUNT(DISTINCT i.voter_id)::int AS ids
+          FROM interactions i
+          JOIN survey_responses sr ON sr.interaction_id = i.id AND sr.org_id = i.org_id
+         WHERE i.org_id = $1
+           AND i.result_code = 'contacted'
+           AND (sr.responses ? 'support_level')
+           AND i.occurred_at >= (CURRENT_DATE - interval '13 days')
+         GROUP BY 1
+      )
+      SELECT d.day,
+             COALESCE(c.contacts,0)::int AS contacts,
+             COALESCE(x.ids,0)::int AS ids
+        FROM days d
+        LEFT JOIN contacts c ON c.day = d.day
+        LEFT JOIN ids x ON x.day = d.day
+       ORDER BY d.day ASC
+      `,
+      [req.context.orgId]
+    );
+
+    res.json({ series: rows.rows });
+  });
+
+  app.get('/api/v1/metrics/geography', requireAdmin, async (req: any, res) => {
+    await recomputeAggregates(req.context.orgId);
+
+    const units = await pool.query(
+      `
+      SELECT u.*, gp.contacted_voters, gp.total_voters, gp.completion_pct, gp.updated_at AS progress_updated_at
+        FROM geography_units u
+        LEFT JOIN geography_progress_summary gp
+          ON gp.geography_unit_id = u.id AND gp.org_id = u.org_id
+       WHERE u.org_id = $1
+       ORDER BY u.unit_type ASC, u.name ASC
+      `,
+      [req.context.orgId]
+    );
+
+    res.json({ units: units.rows });
   });
 
   // -------------------------

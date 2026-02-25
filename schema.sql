@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS geography_units (
     UNIQUE(org_id, unit_type, external_id)
 );
 
+-- -------------------------
+
 CREATE TABLE IF NOT EXISTS memberships (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
@@ -167,6 +169,55 @@ CREATE TABLE IF NOT EXISTS survey_responses (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Phase 3: Metrics aggregates (Milestone 2)
+-- -------------------------
+
+CREATE TABLE IF NOT EXISTS voter_contact_summary (
+    org_id UUID PRIMARY KEY REFERENCES organizations(id),
+    doors_knocked INTEGER NOT NULL DEFAULT 0,
+    contacts INTEGER NOT NULL DEFAULT 0,
+    ids INTEGER NOT NULL DEFAULT 0,
+    last_occurred_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS assignment_progress_summary (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+    list_id UUID NOT NULL REFERENCES walk_lists(id) ON DELETE CASCADE,
+    canvasser_id UUID NOT NULL REFERENCES users(id),
+    total_voters INTEGER NOT NULL DEFAULT 0,
+    contacted_voters INTEGER NOT NULL DEFAULT 0,
+    completion_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_activity_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, assignment_id)
+);
+
+CREATE TABLE IF NOT EXISTS goal_progress_summary (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    goal_id UUID NOT NULL REFERENCES campaign_goals(id) ON DELETE CASCADE,
+    goal_type TEXT NOT NULL,
+    target_value INTEGER NOT NULL,
+    current_value INTEGER NOT NULL DEFAULT 0,
+    completion_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, goal_id)
+);
+
+CREATE TABLE IF NOT EXISTS geography_progress_summary (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    geography_unit_id UUID NOT NULL REFERENCES geography_units(id) ON DELETE CASCADE,
+    contacted_voters INTEGER NOT NULL DEFAULT 0,
+    total_voters INTEGER,
+    completion_pct DOUBLE PRECISION,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(org_id, geography_unit_id)
+);
+
 CREATE TABLE IF NOT EXISTS import_jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id UUID NOT NULL REFERENCES organizations(id),
@@ -239,6 +290,9 @@ CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_profiles_org_id ON campaign_profiles(org_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_goals_org_id ON campaign_goals(org_id);
 CREATE INDEX IF NOT EXISTS idx_geography_units_org_id ON geography_units(org_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_progress_org_id ON assignment_progress_summary(org_id);
+CREATE INDEX IF NOT EXISTS idx_goal_progress_org_id ON goal_progress_summary(org_id);
+CREATE INDEX IF NOT EXISTS idx_geography_progress_org_id ON geography_progress_summary(org_id);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_memberships_org_id ON memberships(org_id);
 CREATE INDEX IF NOT EXISTS idx_voters_org_id ON voters(org_id);
